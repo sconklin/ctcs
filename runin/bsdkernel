@@ -1,0 +1,80 @@
+#!/bin/bash
+#ls1=`mktemp /tmp/kernelcompareorigXXXXXX`
+#ls2=`mktemp /tmp/kernelcomparenewXXXXXX`
+. ../lib/sh/ctcslib.sh
+
+kconfig="yes ''"
+
+if [ -z "$1" ] ; then
+	makej=""
+else
+	makej="-j $1"
+fi
+
+if [ -z "$2" ] ; then
+	dir=/tmp/bsd
+else
+	dir="$2"
+fi
+
+
+function interrupt () {
+	trap interrupt SIGUSR1
+        trap interrupt SIGTERM
+	trap interrupt SIGINT
+#        echo $failed fail $succeed succeed $count count
+	rm -f $ls1 $ls2
+	rm -rf $dir
+        # this just grabs the process id and all children.  and kills them
+	# until they're dead
+	x=1
+	while [ $x -gt 0 ] ; do {
+		kill_children --KILL
+		x=$?
+	} ; done
+	# untrap the exit before we exit :)
+        exit 255
+}
+trap interrupt SIGUSR1
+trap interrupt SIGTERM
+trap interrupt SIGINT
+
+TRYLINUXDIR="/usr/src"
+for lds in $TRYLINUXDIR ; do {
+        LINUXDIR=$lds
+        if [ -d "$LINUXDIR" ] ; then {
+                break;
+        } ; fi
+} ; done
+
+cd $LINUXDIR
+if [ $? != 0 ] ; then
+	echo Linux source does not exist.  Help'!'
+	echo Tried: "$TRYLINUXDIR"
+	exit 2
+fi
+
+echo ]] init
+rm -rf $dir >&2
+sync
+mkdir -p $dir >&2
+cd $dir >&2
+# should no longer be necessary
+cp -pR $LINUXDIR/* . >&2
+
+if [ ! -d "$dir" ] ; then {
+	echo $dir
+	echo test configuration error >&2
+	exit 2
+} ; fi
+
+
+cd $dir
+
+echo ]] build
+echo ]] make buildkernl
+make $makej buildkernel >> /dev/null
+if [ $? != 0 ] ; then exit 1 ; fi
+rm -rf $dir >&2
+
+exit 0

@@ -1,0 +1,24 @@
+#!/usr/bin/perl -w
+sleep 600;
+$cli = `which tw_cli`;
+chomp $cli;
+if ( $cli =~ "tw_cli" ){
+  print "cli is $cli \n";
+}else {
+  print "3ware command line tool not found!!!!";
+  exit 2;
+}
+@tw_info =`tw_cli info|grep c[0-9]`;
+foreach $controller (@tw_info){
+  ($controller) = ( $controller =~ /(c[0-9])/ );
+  chomp $controller;
+  $out =`$cli info $controller`;
+  if ( $out =~ "DEGRADED" ) {
+    print $out;
+    print "\n 3ware Controller $controller in Degraded state!!!! \n";	
+    exit 1;
+  }else {
+    print "3ware controller $controller in good state \n";
+  }
+}
+exit 0;

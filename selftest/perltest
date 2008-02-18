@@ -1,0 +1,7 @@
+#!/usr/bin/perl
+use strict;
+#use Filename::Base;
+use Getopt::Std;
+use POSIX;
+use Time::Local;
+1;

@@ -1,0 +1,63 @@
+#!/bin/bash 
+
+# block read testing
+# give it a device and it will go after it
+
+
+if [ -z "$3" ] ; then
+    echo device count skip_blocks required
+    exit 2
+fi
+
+bsize=1024
+count=$2
+blocks=$3
+
+#disksize=`df --sync|grep $1 |awk '{print $2}'`
+disksize=`fdisk -l $1 | grep $1 | awk '{print $5}'`
+let disksize="$[disksize/1024]";
+# random seek
+echo "Testing disk, random swap"
+let "normmult=disksize/32767"
+echo "$((disksize)) $((normmult))"
+for ((i=0; i <= disksize ; i+=1))
+do
+  let "start=($RANDOM*normmult)-512"
+  let "end=start+count"
+  echo "Testing $start - $end"
+  nice -n 5 badblocks -b $bsize $1 $end $start
+done
+exit 0
+
+# start from both ends
+# moving heads back and fort
+echo "Testing disk, seeking back and forth"
+for ((i=0; i <= (disksize/2) ; ))
+do
+  let "end=i+(bsize*count)"
+  let "j=disksize-i"
+  let "chunk2_begin=j-(bsize*count)"
+ 
+  #./bin/flushb $1	#flush cash
+  echo "Testing $i to $end - $((end-i))"
+  nice -n 5 badblocks -c $count -b $bsize $1 $end $i  
+  echo "Testing $chunk2_begin to $j - $((j-chunk2_begin))"
+  nice -n 5 badblocks -c $count -b $bsize $1 $j $chunk2_begin 
+  #nice -n 5 badblocks -c $count -b $bsize $1 $end2 $start2 
+  let "i=end+(bsize*blocks)"
+  #echo "Skipping $((bsize*blocks)) blocks"
+  #./bin/flushb $1
+done
+exit 0
+
+# sequential
+echo "Testing disk, sequential swap"
+for ((i=0; i <= (disksize/2) ; i+=bsize))
+do
+  echo -n "$i "
+  let "end=i+bsize"
+  ./bin/flushb $1	#flush cash
+  nice -n 5 badblocks -b $bsize $1 $end $i
+  let "i+=bsize+(bsize*blocks)"
+done
+exit $?

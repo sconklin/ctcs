@@ -1,0 +1,30 @@
+#!/bin/bash
+if [ ! -z "$1" ] ; then
+	SDELAY=$1
+else
+	SDELAY=15
+fi
+
+x=`dmesg | wc -l`
+while [ ! $x -gt 0 ] ; do  {
+	sleep $SDELAY
+	x=`dmesg | wc -l`
+} ; done
+
+echo ]] dmesg entries
+
+dmesg  -c | \
+egrep -v "(^RPC:|USB device not accepting new address|error_exit|USB Mass Storage Data integrity not assured)" | \
+egrep -i '(3w-xxxx:.* Bad|ECC: SBE|ECC: MBE|stuck.*on.*IPI.*wait|warning|error|NMI|critical|scsi : aborting command due to timeout|lost interrupt)|(VM:.*failed)'
+
+echo ]] dmesg entries end
+
+if [ $? = 0 ] ; then {
+	echo "]] kernel error detected from dmesg see above lines"
+	exit 1
+} ; fi
+if [ `uname -s` = "FreeBSD" ] ; then
+	sysctl kern.msgbuf_clear=1 >> /dev/null
+fi
+
+exit 0

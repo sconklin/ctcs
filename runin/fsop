@@ -1,0 +1,19 @@
+#!/bin/bash
+function interrupt () {
+	trap interrupt SIGUSR1
+    trap interrupt SIGTERM
+	trap interrupt SIGINT
+	# untrap the exit before we exit :)
+    exit 255
+}
+
+trap interrupt SIGUSR1
+trap interrupt SIGTERM
+trap interrupt SIGINT
+
+curdir=`pwd`
+cd $1
+fileop -f 30 -t
+
+if [ $? != 0 ] ; then exit 1 ; fi
+exit 0

@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# block read testing
+# give it a device and it will go after it
+
+
+if [ -z "$3" ] ; then
+    echo "Usage: $0 device count percent"
+    echo "	device : device to test(eg. /dev/sda)"
+    echo "	count : number of blocks to test for each chunk"
+    echo "	percent : percentage of disk surface coverage"
+    exit 2
+fi
+
+renice +5 -p $$
+bsize=1024
+count=$2
+percent=$3
+
+disksize=`fdisk -l $1 | grep -m 1 $1 | awk '{print $5}'`
+let disksize="$[disksize/bsize]"
+echo "disksize : $disksize"
+let chunks=$[disksize/count]
+echo "chunks : $chunks"
+let blocks=$(echo "($chunks * $percent / 100)" | bc)
+echo "blocks : $blocks"
+let interleave=$(echo "($chunks / $blocks)" | bc)
+echo "interleave : $interleave"
+
+echo "
+Sequential Disk Test
+Disk coverage = $percent%, $((count*blocks*bsize/1024))KB 
+Chunk Size = $((chunks/1024))KB
+blocks = $blocks
+interleave = $interleave"
+
+for ((i=0; i <= blocks ; i+=1))
+do
+  let "start=count*i*interleave"
+  let "end=start+count"
+  echo "Testing at location $((100*end/disksize))% - $start to $end - $i of $blocks  "
+  badblocks -w -t rand -b $bsize $1 $end $start 2&>1
+done
+exit $?

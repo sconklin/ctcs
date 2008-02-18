@@ -1,0 +1,41 @@
+#!/usr/bin/perl -w
+$card = $ARGV[0];
+$tw = $ARGV[1];
+sleep 720;
+$|=1;
+$error=0;
+$_ = `tw_cli info c$card numports`;
+($port) =  /\ (1*[2,4,8])/;
+$model =`tw_cli info c$card model`;
+if ( $model =~ /750[0,6]/ || $model =~ /850[0-6]/ ){
+  $twtype = "e";
+}else { $twtype = "a";} 
+while ( $port != 0 ){
+  $port--;
+  $out= `smartctl -d 3ware,$port -H /dev/tw${twtype}${tw}`;
+  next if ( $out =~  "NO DEVICE FOUND ON 3WARE CONTROLLER");
+  $out = system "smartctl -q errorsonly -d 3ware,$port -H /dev/tw${twtype}${tw}&>/dev/null";
+  if  ( $out != 1024 && $out != 0 ){
+    print `smartctl -q errorsonly -a -d 3ware,$port /dev/twa${card}`;
+    print "\nSMART health status Failure : On card $card on port $port\n";
+    #print "Note a 3ware block device responds to requests for all drives on the controller!!!\n";
+    $error=1;
+  }
+  $out = system "smartctl -q errorsonly -d 3ware,$port -l selftest  /dev/tw${twtype}${tw}&>/dev/null";
+  if  ( $out != 1024 && $out != 0 ){
+    print `smartctl -q errorsonly -a -d 3ware,$port -l selftest /dev/twa${twtype}${tw}`;
+    print "\nSMART Selftest Failure : On card $card port $port\n";
+    #print "Note a 3ware block device responds to requests for all drives on the controller!!!\n";
+    $error=1;
+  }
+
+#There are too many non fatal errors that get flagged by this test.
+  #$out = system "smartctl -q errorsonly -d 3ware,$port -l error  /dev/$drive";
+  #if  ( $out != 1024 && $out != 0 ){
+    #print `smartctl -q errorsonly -a -d 3ware,$port /dev/$drive`;
+    #print "\nSMART health status Failure : On card behind $drive on port $port\n";
+    #print "Note a 3ware block device responds to requests for all drives on the controller!!!\n";
+    #$error=1;
+  #}
+}
+exit $error

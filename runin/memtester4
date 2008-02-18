@@ -1,0 +1,17 @@
+#!/bin/bash
+function interrupt () {
+	trap interrupt SIGUSR1
+        trap interrupt SIGTERM
+	trap interrupt SIGINT
+	#rm -f $ls1 $ls2
+	rm -rf $dir
+        # this just grabs the process id and all children.  and kills them
+	# until they're dead
+	x=1
+	while [ $x -gt 0 ] ; do
+	        kill_children --KILL
+		x=$?
+	done
+        exit 255
+}
+./bin/memtester $1 1

@@ -1,0 +1,32 @@
+#!/bin/bash
+function interrupt () {
+	trap interrupt SIGUSR1
+	trap interrupt SIGTERM
+	trap interrupt SIGINT
+	rm -f pi.dat pi0.dat
+	# untrap the exit before we exit :)
+        exit 255
+}
+trap interrupt SIGUSR1
+trap interrupt SIGTERM
+trap interrupt SIGINT
+
+if [ -z "$1" ] ; then 
+	size=2000000;
+else
+	size=$1;
+ fi
+
+echo ]] PI1
+echo $size | ./bin/pi_cs  >> /dev/null 2>&1
+cp pi.dat pi0.dat
+
+echo ]] PI2
+echo $size | ./bin/pi_cs >> /dev/null 2>&1
+
+echo ]] Compare PI1 against PI2
+cmp -lb pi.dat pi0.dat >> /dev/null 2>&1
+ret=$?
+rm -f pi.dat pi0.dat
+if [ $ret != 0 ] ; then exit 1 ; fi
+exit 0

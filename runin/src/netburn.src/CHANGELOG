@@ -1,0 +1,8 @@
+-- Release 0.11 (26 Aug 2005) Damon Chitsaz
+	- Packets status is only shown in verbose mode (-v)
+	- Size of acceptable packet loss could be controlled with threshold switch (-x [size])
+	- Maximum packet buffer size has been increased to 2500 bytes
+	
+-- Release 0.1 (25 Aug 2005) Damon Chitsaz
+	- Initial release
+	

@@ -1,0 +1,62 @@
+#!/bin/bash
+# iozone test of filesystems
+tstatus=255
+
+renice 5 $$ >> /dev/null 2>&1
+
+function interrupt () {
+    x=1
+    y=0
+    while [ $x != 0 ] ; do {
+    y=$[$y + 1]
+    x=0
+    for i in `pstree -p $$ | sed 's/[a-z\+\\(\)\|\.\/\-]/ /g'` ; do {
+            if [ $i != $$ ] ; then {
+#               echo destroying $i
+		if [ $y -lt 3 ] ; then
+	                kill $i >> /dev/null 2>&1
+			if [ $? = 0 ] ; then x=$[$x + 1] ; fi
+		else
+			kill -9 $i >> /dev/null 2>&1
+			if [ $? = 0 ] ; then x=$[$x + 1] ; fi
+		fi
+#           } ; else {
+#               echo refusing to commit suicide.
+            } ; fi
+        } ; done 
+    sleep 1
+    } ; done
+
+    if [ -e $tmp ] ; then {
+#        echo removing tmp
+        rm -f $tmp
+	sync
+    } ; fi
+
+    trap SIGINT
+    trap SIGTERM
+    trap SIGUSR1
+    trap EXIT
+
+    exit $tstatus
+}
+
+
+if [ -z "$3" ] ; then {
+	echo need partition mountpoint spaceavailable
+	exit 2
+} ; fi
+
+tmp=`mktemp $2/iozone.out.XXXXXX`
+trap interrupt SIGINT
+trap interrupt SIGTERM
+trap interrupt SIGUSR1
+trap interrupt EXIT
+
+btotest=$3
+
+if [ ! -x ./bin/iozone ] ; then {
+	echo 'iozone not found.  Is va-ctcs compiled?'
+} ; fi
+# run iozone in diagnostic mode, mixing mmap and file I/O, with 0x55=85=1010101 pattern
+exec ./bin/iozone -f $tmp -g $btotest -a -+d -I -Z -V 85

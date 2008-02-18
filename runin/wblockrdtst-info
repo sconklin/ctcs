@@ -1,0 +1,29 @@
+#!/usr/bin/perl -w
+# block rw testing in nondestructive mode
+# give it a device and it will go after it
+
+$SLEEPDELAY=120;
+$device = $ARGV[0];
+if ( $device !~ "dev" ) {
+    print "device required";
+    exit 1;
+}
+
+if ( "$device" =~ "/dev/fd" ){
+    $bsize=512;
+}else{
+    $bsize=`bin/print_disk_info $device| awk '{ print \$2;}'`;
+    chomp $bsize;
+}
+if ( ! defined $bsize || $bsize < 1 ) {
+    print "Unable to configure test.  $device not present or not readable.";
+    exit 2;
+} 
+
+if  ( __FILE__  =~  "sblockrdtst-info" )  {
+    srand;
+    $RANDOM = rand($SLEEPDELAY)+1;
+    sleep($RANDOM);
+}  
+print "$device $bsize";
+exit 0;

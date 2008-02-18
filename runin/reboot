@@ -1,0 +1,32 @@
+#!/bin/bash
+
+. ../lib/sh/ctcslib.sh
+
+
+function interrupt () {
+	trap interrupt SIGUSR1
+        trap interrupt SIGTERM
+	trap interrupt SIGINT
+	rm -rf /tmp/.cerberus_reboot_test_marker
+        exit 255
+}
+
+trap interrupt SIGUSR1
+trap interrupt SIGTERM
+trap interrupt SIGINT
+
+if [ -e /tmp/.cerberus_reboot_test_marker ] ; then 
+  #guard against evil tmp watch like cron jobs
+  touch /tmp/.cerberus_reboot_test_marker
+  if  [ -e /tmp/.cerberus_reboot_test_marker2 ] ; then
+    sleep 100
+    exit 1  
+  fi
+  echo "The system appears to have rebooted!!!"
+  touch /tmp/.cerberus_reboot_test_marker2
+  exit 1  
+fi
+touch /tmp/.cerberus_reboot_test_marker
+sleep 3000
+rm -rf /tmp/.cerberus_reboot_test_marker
+exit 0

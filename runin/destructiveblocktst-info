@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# block read testing
+# give it a device and it will go after it
+
+SLEEPDELAY=60
+
+if [ -z "$1" ] ; then
+    echo device required, maxblocks optional
+    exit 1
+fi
+device=$1
+if [ ! -z "$2" ] ; then 
+    maxblocks=$2
+else
+    maxblocks=0
+fi
+
+size=2880
+bsize=512
+
+mount | grep "$device" >> /dev/null 2>&1
+if [ $? = 0 ] ; then {
+    echo cant do this on a mounted filesystem\!\!
+    exit 2
+} ; fi
+
+if [ "$device" = "/dev/fd0" ] ; then
+    bsize=512
+else
+    scratch=`bin/print_disk_info $device`
+    bsize=`echo $scratch | awk '{print $2;}'`
+    if [ -z "$bsize" ] ; then {
+	bsize=512
+   } ; fi
+fi
+
+
+if [ `basename "$0"` = "sdestructiveblocktst-info" ] ; then {
+    sleep $[$RANDOM % $SLEEPDELAY]
+} ; fi
+
+echo $device $bsize 
+exit $?

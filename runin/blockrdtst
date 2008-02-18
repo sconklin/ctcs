@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# block read testing
+# give it a device and it will go after it
+
+
+if [ -z "$2" ] ; then
+    echo device bsize required
+    exit 2
+fi
+
+bsize=$2
+
+./bin/flushb $1
+nice -n 5 badblocks -b $bsize $1 
+exit $?

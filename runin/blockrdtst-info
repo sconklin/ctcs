@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# block read testing
+# give it a device and it will go after it
+
+SLEEPDELAY=120;
+
+if [ -z "$1" ] ; then
+    echo device required
+    exit 1
+fi
+device=$1
+bsize=512
+
+if [ "$device" = "/dev/fd0" ] ; then
+    bsize=512
+else
+    scratch=`bin/print_disk_info $device`
+    bsize=`echo $scratch | awk '{print $2;}'`
+    if [ -z "$bsize" ] ; then {
+	bsize=512
+    } ; fi
+fi
+
+
+if [ `basename $0` = "sblockrdtst-info" ] ; then {
+	sleep $[$RANDOM % $SLEEPDELAY]
+} ; fi
+
+echo $device $bsize
+exit 0

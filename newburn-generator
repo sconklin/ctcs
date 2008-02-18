@@ -99,7 +99,7 @@ sub usage {
 	print("
 VA Manufacturing Burn Test Generator
 CVS info:
-" . '$Id: newburn-generator,v 1.1 2008/02/18 18:17:01 damoncz Exp $' . "
+" . '$Id: newburn-generator,v 1.1.1.1 2008/02/18 18:17:01 damoncz Exp $' . "
 " . '$Name:  $' . "
 usage: $ARGV[0] [opts] [time]
 

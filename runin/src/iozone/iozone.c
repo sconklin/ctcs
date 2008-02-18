@@ -47,7 +47,7 @@
 
 
 /* The version number */
-#define THISVERSION "        Version $Revision: 1.1 $"
+#define THISVERSION "        Version $Revision: 1.1.1.1 $"
 
 #if defined(linux)
   #define _GNU_SOURCE

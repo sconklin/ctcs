@@ -103,7 +103,7 @@ void usage(void);
 void bzero();
 void clear_stats();
 
-#define THISVERSION "        $Revision: 1.1 $"
+#define THISVERSION "        $Revision: 1.1.1.1 $"
 /*#define NULL 0*/
 
 char version[]=THISVERSION;

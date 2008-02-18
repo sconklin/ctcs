@@ -150,7 +150,7 @@ extern int one;
  * cache, pointed to by async_init(gc) will be of
  * this structure type.
  */
-char version[] = "Libasync Version $Revision: 1.1 $";
+char version[] = "Libasync Version $Revision: 1.1.1.1 $";
 struct cache_ent {
 	struct aiocb myaiocb;			/* For use in small file mode */
 #ifdef _LARGEFILE64_SOURCE 

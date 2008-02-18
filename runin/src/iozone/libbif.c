@@ -84,7 +84,7 @@ void do_label(int,char *,int,int);
 /*	  column							*/
 /************************************************************************/
 
-char libbif_version[] = "Libbif Version $Revision: 1.1 $";
+char libbif_version[] = "Libbif Version $Revision: 1.1.1.1 $";
 void do_eof(int );		/* Used internally */
 void do_header(int );		/* Used internally */
 int endian(void);

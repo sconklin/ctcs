@@ -1,5 +1,6 @@
 /* Fatal error unrelated to system call
  * Print message and terminate */
+#include <string.h>
 #include "sort.h"
 #define MAXLINE	120
 #define LOG_ERR	120

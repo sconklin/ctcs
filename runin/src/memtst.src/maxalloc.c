@@ -10,9 +10,6 @@
 
 #if defined(__BSD__)
 	static const size_t PAGE_SIZE = 4096;
-#else
-/* this is horribly architecture specific */
-	#include <asm/page.h>
 #endif
 
 

@@ -1,5 +1,5 @@
 
-COPTIMIZE = -O3 --combine-fwhole-prgram -ffunction-sections -static -msse2
+COPTIMIZE = -O3 --combine-fwhole-prgram -ffunction-sections -msse2
 CFLAGS2 = $(CFLAGS) -g ${COPTIMIZE}
 CC = @gcc
 OBJS = main.o error.o heap.o quick.o merge.o shell.o

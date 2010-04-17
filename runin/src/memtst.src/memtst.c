@@ -10,8 +10,6 @@
 
 #if defined(__BSD__)
 	static const size_t PAGE_SIZE = 4096;
-#else
-	#include <asm/page.h>
 #endif
 
 /* The verbose global from memtst_main.c */
@@ -331,6 +329,12 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 	int kmem_file;
 	int d;
 
+	/* Newer linux distributions don't have asm/page.h therefore
+	 * we are going to get the page size using the value of
+	 * _SC_PAGESIZE instead.
+	 */
+	u_long page_size = sysconf(_SC_PAGESIZE);
+
 	/* window manipulation, iterator, read retval, etc */
 	int low, high, foo;
       	int rd;
@@ -353,7 +357,7 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 
 	/* Now compute the offset (in chars) of the error from the page
 	   boundary. */
-	fail_page_offset = ((int) (&nbuf[offset])) % PAGE_SIZE;
+	fail_page_offset = ((int) (&nbuf[offset])) % page_size;
 
 	kmem_file = open("/proc/kcore",0);
 	if (kmem_file < 0) {
@@ -370,7 +374,7 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 	 * window.
 	 */
 	fail_page_offset -= ((offset - low) * sizeof(int));
-	if (fail_page_offset < 0) fail_page_offset+=PAGE_SIZE;
+	if (fail_page_offset < 0) fail_page_offset+=page_size;
 
 	printf("%d %x fail_page_offset\n",fail_page_offset,fail_page_offset);
 
@@ -382,8 +386,8 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 	 */     #include <sys/types.h>
      #include <sys/sysctl.h>
 
-	lseek(kmem_file,pages*PAGE_SIZE+fail_page_offset,SEEK_SET);
-	phys_addr=pages*PAGE_SIZE+fail_page_offset;
+	lseek(kmem_file,pages*page_size+fail_page_offset,SEEK_SET);
+	phys_addr=pages*page_size+fail_page_offset;
 
 	/* We now use lseeks to (hugely) improve the performance of this
 	   thing.  Large memory systems were extremely painful before. 
@@ -396,8 +400,8 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 			foo = low;	
 			/* Every time we miss, skip to the next page. */
 			++pages;
-			lseek(kmem_file,pages*PAGE_SIZE+fail_page_offset,SEEK_SET);
-			phys_addr=pages*PAGE_SIZE+fail_page_offset;
+			lseek(kmem_file,pages*page_size+fail_page_offset,SEEK_SET);
+			phys_addr=pages*page_size+fail_page_offset;
 			continue;
 		}
 		/* If foo made it to high, we've found it. */
@@ -410,7 +414,7 @@ void kmemscan (int *nbuf, int block_size, int offset) {
 			fprintf(stderr, "Possible location of memory failure: %p (%dM) on page %d\n",
 				(void *) failure,
 				(int) (failure/1024/1024),
-				(int) (failure/PAGE_SIZE));
+				(int) (failure/page_size));
 			close(kmem_file);
 			return;
 		} 

@@ -16,7 +16,7 @@
 #ifndef dgt_int
 #ifdef USE_DGT_LONG_INT
 #define dgt_int long long int /* 64 bit int */
-#define DGT_INT_MAX LLONG_MAX /* 64 bit int max */
+#define DGT_INT_MAX LONG_MAX /* 64 bit int max */
 #else
 #ifdef USE_DGT_NORMAL_INT
 #define dgt_int int           /* 32 bit int */
@@ -31,7 +31,7 @@
 #ifndef fft_int
 #ifdef USE_FFT_LONG_INT
 #define fft_int long long int /* 64 bit int */
-#define FFT_INT_MAX LLONG_MAX /* 64 bit int max */
+#define FFT_INT_MAX LONG_MAX /* 64 bit int max */
 #else
 #define fft_int int           /* 32 bit int */
 #define FFT_INT_MAX INT_MAX   /* 32 bit int max */

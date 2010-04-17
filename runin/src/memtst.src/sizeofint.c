@@ -1,6 +1,7 @@
 /* Jason continues to not use autoconf despite the fact he should. */
 
 #include <stdio.h>
+#include <stdlib.h>
 
 main ()
 {

@@ -1,7 +1,7 @@
 # ---- for GNU gcc ----
 CC = gcc
-OFLAGS_FFT = -O6 -ffast-math 
-OFLAGS_PI = -O6 -ffast-math -mtune=pentium4 -mfpmath=sse,387 -msse3
+OFLAGS_FFT = -O6 -ffast-math
+OFLAGS_PI = -O6 -ffast-math
 
 # ---- for SUN WS cc ----
 #CC = cc
@@ -19,10 +19,10 @@ OFLAGS_PI = -O6 -ffast-math -mtune=pentium4 -mfpmath=sse,387 -msse3
 #LFLAGS_TH = -lpthread
 
 # ---- use 64-bit size FFT ----
-#CFLAGS_FI = -DUSE_FFT_LONG_INT
+CFLAGS_FI = -DUSE_FFT_LONG_INT
 
 
-CFLAGS = $(CFLAGS_TH) $(CFLAGS_FI)
+CFLAGS = $(CFLAGS_TH) $(CFLAGS_FI) -DPI_OUT_LOGFILE
 LFLAGS = -lm $(LFLAGS_TH)
 
 

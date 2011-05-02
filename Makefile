@@ -10,7 +10,6 @@
 include build.mk
 
 export CC=gcc
-export CFLAGS= -O6 -mtune=i686 -finline-functions -funroll-loops
 
 all: symlinks;
 	$(MAKE) -C runin all

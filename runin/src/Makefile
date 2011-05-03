@@ -27,14 +27,14 @@ dist-clean:
 	rm -f ./netburn
 	sh -c "$(MAKE) -C cpuburn dist-clean"
 	sh -c "$(MAKE) -C crashme dist-clean"
-	sh -c "$(MAKE) -C memtester4 clean"
+	sh -c "$(MAKE) -C memtester-4.2.1 clean"
 install: all 
 	cp random ../bin
 	cp prandom ../bin
 	cp flushb ../bin/flushb.real
 	cp chartst ..
 	cp memtst.src/memtst ../memtst
-	cp memtester4/memtester ../bin/memtester
+	cp memtester-4.2.1/memtester ../bin/memtester
 	cp sort.src/sort ../bin
 	cp iozone3_347/src/current/iozone ../bin
 	cp iozone3_347/src/current/fileop ../bin
@@ -46,7 +46,7 @@ ifndef __BSD__
 endif
 
 memtester: 
-	$(MAKE) -C memtester4
+	$(MAKE) -C memtester-4.2.1
 
 memtst: 
 	$(MAKE) -C memtst.src
@@ -92,7 +92,7 @@ pi:
 clean: ;
 	rm -f *.o prandom chartst flushb random
 	$(MAKE) -C memtst.src clean
-	$(MAKE) -C memtester4 clean
+	$(MAKE) -C memtester-4.2.1 clean
 	$(MAKE) -C cpuburn clean
 	$(MAKE) -C crashme clean
 	$(MAKE) -C sort.src clean

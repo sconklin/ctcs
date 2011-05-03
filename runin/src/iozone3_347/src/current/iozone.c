@@ -20,7 +20,7 @@
 /* Its purpose is to provide automated filesystem characterization.	*/
 /* Enhancements have been made by:					*/
 /*									*/
-/* Don Capps	   (HP)	         capps@iozone.org			*/ 
+/* Don Capps	   	         capps@iozone.org			*/ 
 /*									*/
 /* Iozone can perform single stream and multi stream I/O		*/
 /* also it now performs read, write, re-read, re-write, 		*/
@@ -47,7 +47,7 @@
 
 
 /* The version number */
-#define THISVERSION "        Version $Revision: 1.1.1.1 $"
+#define THISVERSION "        Version $Revision: 3.347 $"
 
 #if defined(linux)
   #define _GNU_SOURCE
@@ -105,6 +105,10 @@ void Kill();
 long long l_min();
 long long l_max();
 long long mythread_create();
+int gen_new_buf();
+void touch_dedup();
+void init_by_array64(unsigned long long *, unsigned long long );
+unsigned long long genrand64_int64(void);
 #endif
 
 #include <fcntl.h>
@@ -120,7 +124,8 @@ char *help[] = {
 "                  [-J milliseconds] [-X write_telemetry_filename] [-w] [-W]",
 "                  [-Y read_telemetry_filename] [-y minrecsize_Kb] [-q maxrecsize_Kb]",
 "                  [-+u] [-+m cluster_filename] [-+d] [-+x multiplier] [-+p # ]",
-"                  [-+r] [-+t] [-+X] [-+Z]",
+"                  [-+r] [-+t] [-+X] [-+Z] [-+w percent dedupable] [-+y percent_interior_dedup]",
+"                  [-+C percent_dedup_within]",
 " ",
 "           -a  Auto mode",
 "           -A  Auto2 mode",
@@ -183,6 +188,7 @@ char *help[] = {
 "           -Y filename  Read  telemetry file. Contains lines with (offset reclen compute_time) in ascii",
 "           -z  Used in conjunction with -a to test all possible record sizes",
 "           -Z  Enable mixing of mmap I/O and file I/O",
+"           -+E Use existing non-Iozone file for read-only testing",
 "           -+K Sony special. Manual control of test 8.",
 "           -+m  Cluster_filename   Enable Cluster testing",
 "           -+d  File I/O diagnostic mode. (To troubleshoot a broken file I/O subsystem)",
@@ -204,6 +210,9 @@ char *help[] = {
 "           -+A #  Enable madvise. 0 = normal, 1=random, 2=sequential",
 "                                  3=dontneed, 4=willneed",
 #endif
+"           -+N Do not truncate existing files on sequential writes.",
+"           -+S # Dedup-able data is limited to sharing within each numerically",
+"                 identified file set",
 "           -+V Enable shared file. No locking.",
 #if defined(Windows)
 "           -+U Windows Unbufferd I/O API (Very Experimental)",
@@ -213,6 +222,11 @@ char *help[] = {
 "           -+Z Enable old data set compatibility mode. WARNING.. Published",
 "               hacks may invalidate these results and generate bogus, high",
 "               values for results.",
+"           -+w ## Percent of dedup-able data in buffers.",
+"           -+y ## Percent of dedup-able within & across files in buffers.",
+"           -+C ## Percent of dedup-able within & not across files in buffers.",
+"           -+H Hostname    Hostname of the PIT server.",
+"           -+P Service     Service  of the PIT server.",
 "" };
 
 char *head1[] = {
@@ -265,6 +279,12 @@ THISVERSION,
 #if defined (__FreeBSD__) || defined(__OpenBSD__) || defined(__bsdi__) || defined(__APPLE__) || defined(__DragonFly__)
 #ifndef O_SYNC
 #define O_SYNC O_FSYNC
+#endif
+#endif
+
+#if defined (__FreeBSD__)
+#ifndef O_RSYNC
+#define O_RSYNC O_FSYNC
 #endif
 #endif
 
@@ -411,6 +431,8 @@ struct iovec piov[PVECMAX];
 #endif
 #endif
 
+#define DEDUPSEED 0x2719362
+
 
 /*
  * In multi thread/process throughput mode each child keeps track of
@@ -451,6 +473,8 @@ struct runtime {
  */
 struct client_command {
 	char c_host_name[100];
+	char c_pit_hostname[40];
+	char c_pit_service[8];
 	char c_client_name[100];
 	char c_working_dir[200];
 	char c_file_name[200];
@@ -462,6 +486,7 @@ struct client_command {
 	int c_mfflag;
 	int c_unbuffered;
 	int c_noretest;
+	int c_notruncate;
 	int c_read_sync;
 	int c_jflag;
 	int c_async_flag;
@@ -474,6 +499,10 @@ struct client_command {
 	int c_sverify;
 	int c_odsync;
 	int c_diag_v;
+	int c_dedup;
+	int c_dedup_interior;
+	int c_dedup_compress;
+	int c_dedup_mseed;
 	int c_Q_flag;
 	int c_L_flag;
 	int c_OPS_flag;
@@ -500,6 +529,7 @@ struct client_command {
 	int c_command;
 	int c_testnum;
 	int c_no_unlink;
+	int c_no_write;
 	int c_file_lock;
 	int c_rec_lock;
 	int c_Kplus_readers;
@@ -539,6 +569,8 @@ struct client_command {
  */
 struct client_neutral_command {
 	char c_host_name[40];
+	char c_pit_hostname[40];
+	char c_pit_service[8];
 	char c_client_name[100];
 	char c_working_dir[100];
 	char c_file_name[100];
@@ -550,6 +582,7 @@ struct client_neutral_command {
 	char c_mfflag[2];
 	char c_unbuffered[2];
 	char c_noretest[2];
+	char c_notruncate[2];
 	char c_read_sync[2];
 	char c_jflag[2];
 	char c_async_flag[2];
@@ -562,6 +595,10 @@ struct client_neutral_command {
 	char c_sverify[2];
 	char c_odsync[2];
 	char c_diag_v[2];
+	char c_dedup[4];
+	char c_dedup_interior[4];
+	char c_dedup_compress[4];
+	char c_dedup_mseed[4];
 	char c_Q_flag[2];
 	char c_L_flag[2];
 	char c_OPS_flag[2];
@@ -596,7 +633,8 @@ struct client_neutral_command {
 	char c_client_number[20]; 	/* int */
 	char c_command[20]; 		/* int */
 	char c_testnum[20]; 		/* int */
-	char c_no_unlink[20]; 		/* int */
+	char c_no_unlink[4]; 		/* int */
+	char c_no_write[4]; 		/* int */
 	char c_pattern[20]; 		/* int */
 	char c_version[20]; 		/* int */
 	char c_base_time[20]; 		/* int */
@@ -624,6 +662,7 @@ struct master_command {
 	char m_client_name[100];
 	char m_stop_flag; 
 	int m_client_number;
+	int m_client_error;
 	int m_child_port;
 	int m_child_async_port;
 	int m_command;
@@ -646,6 +685,7 @@ struct master_neutral_command {
 	char m_host_name[100];
 	char m_client_name[100];
 	char m_client_number[20];	/* int */
+	char m_client_error[20];	/* int */
 	char m_stop_flag[4];		/* char +space */
 	char m_child_port[20];		/* int */
 	char m_child_async_port[20];	/* int */
@@ -775,20 +815,20 @@ struct master_neutral_command {
 #ifdef HAVE_PREAD
 #include <sys/times.h>
 #if defined(HAVE_PREAD) && defined(HAVE_PREADV)
-#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld%9ld%10ld%10ld%9ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s%8s%9s%7s%10s%10s%10s%9s%9s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld%9ld%10ld%10ld%9ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s%8s%9s%7s%10s%10s%10s%9s%9s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #else
-#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s%8s%9s%7s%10s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s\n"
+#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s%8s%9s%7s%10s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #endif
 #else
-#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING1 "%16ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%9ld%9ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #endif
 #endif
@@ -797,20 +837,20 @@ struct master_neutral_command {
 #ifdef HAVE_PREAD
 #include <sys/times.h>
 #if defined(HAVE_PREAD) && defined(HAVE_PREADV)
-#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld%9ld%10ld%10ld%9ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s%8s%9s%7s%10s%10s%10s%9s%9s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld%9ld%10ld%10ld%9ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s%8s%9s%7s%10s%10s%10s%9s%9s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #else
-#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s%8s%9s%7s%10s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%9ld%9ld%8ld%10ld%9ld%10ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s%8s%9s%7s%10s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #endif
 #else
-#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%8ld%9ld%9ld\n"
-#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
-#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s%8s%8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING1 "%16lld%8ld%8ld%8ld%8ld%8ld%8ld%8ld %8ld %8ld%8ld%8ld%8ld%9ld%9ld\n"
+#define CONTROL_STRING2 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
+#define CONTROL_STRING3 "%16s%8s%8s%8s%8s%10s%8s%8s%8s %8s %8s%9s%9s%8s%9s\n"
 #define CONTROL_STRING4 "%16s%8s%8s%8s%8s%10s\n"
 #endif
 #endif
@@ -882,6 +922,7 @@ struct master_neutral_command {
 /* Child tells parent that it's DONE */
 #define CHILD_STATE_DONE	3	
 
+#define MERSENNE
 
 /******************************************************************/
 /*								  */
@@ -889,6 +930,9 @@ struct master_neutral_command {
 /*								  */
 /******************************************************************/
 char *initfile();
+int pit_gettimeofday( struct timeval *, struct timezone *, char *, char *);
+static int openSckt( const char *, const char *, unsigned int );
+static void pit( int, struct timeval *);
 void mmap_end();
 void alloc_pbuf();
 void auto_test();		/* perform automatic test series  */
@@ -1092,6 +1136,7 @@ void del_record_sizes();
 #define I_OPEN(x,y,z) 	open64(x,(int)(y),(int)(z))
 #define I_CREAT(x,y) 	creat64(x,(int)(y))
 #define I_FOPEN(x,y) 	fopen64(x,y)
+#define I_STAT(x,y) 	stat64(x,y)
 #ifdef HAVE_PREAD
 #define I_PREAD(a,b,c,d)	pread64(a,b,(size_t)(c),(off64_t)(d))
 #define I_PWRITE(a,b,c,d)	pwrite64(a,b,(size_t)(c),(off64_t)(d))
@@ -1102,6 +1147,7 @@ void del_record_sizes();
 #define I_OPEN(x,y,z) 	open(x,(int)(y),(int)(z))
 #define I_CREAT(x,y) 	creat(x,(int)(y))
 #define I_FOPEN(x,y) 	fopen(x,y)
+#define I_STAT(x,y) 	stat(x,y)
 #ifdef HAVE_PREAD
 #define I_PREAD(a,b,c,d)	pread(a,b,(size_t)(c),(off_t)(d))
 #define I_PWRITE(a,b,c,d)	pwrite(a,b,(size_t)(c),(off_t)(d))
@@ -1195,6 +1241,8 @@ off64_t offset64 = 0;               /*offset for random I/O */
 off64_t filebytes64;
 off64_t r_range[100];
 off64_t s_range[100];
+int t_range[100];
+int t_count = 0;
 int r_count,s_count;
 char *barray[MAXSTREAMS];
 char *haveshm;
@@ -1208,8 +1256,11 @@ char silent,read_sync;
 char master_iozone, client_iozone,distributed;
 int bif_fd,s_count;
 int bif_row,bif_column;
+int dedup_mseed = 1;
 char aflag, Eflag, hflag, Rflag, rflag, sflag;
-char diag_v,sent_stop;
+char diag_v,sent_stop,dedup,dedup_interior,dedup_compress;
+char *dedup_ibuf;
+char *dedup_temp;
 char bif_flag;
 int rlocking;
 int share_file;
@@ -1221,6 +1272,7 @@ char *build_name = "Windows";
 char *build_name = NAME;
 #endif
 char imon_start[256],imon_stop[256]; 
+char imon_sync;
 char trflag; 
 char cpuutilflag;
 char seq_mix;
@@ -1267,7 +1319,7 @@ char dummyfile [MAXSTREAMS][MAXNAMESIZE];  /* name of dummy file     */
 char dummyfile1 [MAXNAMESIZE];             /* name of dummy file     */
 char *filearray[MAXSTREAMS];		   /* array of file names    */
 char tfile[] = "iozone";
-char *buffer, *mbuffer,*mainbuffer;
+char *buffer,*buffer1, *mbuffer,*mainbuffer;
 FILE *pi,*r_traj_fd,*w_traj_fd;
 VOLATILE char *pbuffer;
 char *default_filename="iozone.tmp"; /*default name of temporary file*/
@@ -1299,6 +1351,10 @@ char splash[80][80];
 int splash_line;
 char client_filename[256];
 char remote_shell[256];
+int client_error;
+
+char pit_hostname[40];
+char pit_service[7];
 
 /* 
  * Host ports used to listen, and handle errors.
@@ -1379,7 +1435,7 @@ struct sockaddr_in child_sync_sock, child_async_sock;
 /*
  * Change this whenever you change the message format of master or client.
  */
-int proto_version = 19;
+int proto_version = 23;
 
 /******************************************************************************/
 /* Tele-port zone. These variables are updated on the clients when one is     */
@@ -1404,6 +1460,7 @@ char write_traj_filename [MAXNAMESIZE];     /* name of write telemetry file */
 char read_traj_filename [MAXNAMESIZE];    /* name of read telemetry file  */
 char oflag,jflag,k_flag,h_flag,mflag,pflag,unbuffered,Kplus_flag;
 char noretest;
+char notruncate;   /* turn off truncation of files */
 char async_flag,stride_flag,mmapflag,mmapasflag,mmapssflag,mmapnsflag,mmap_mix;
 char verify = 1;
 int restf;
@@ -1414,6 +1471,7 @@ char L_flag=0;
 char no_copy_flag,include_close,include_flush;
 char disrupt_flag,compute_flag,xflag,Z_flag, X_flag;
 int no_unlink = 0;
+int no_write = 0;
 int r_traj_flag,w_traj_flag;
 char MS_flag;
 int advise_op,advise_flag;
@@ -1523,7 +1581,7 @@ char **argv;
 	setvbuf( stderr, NULL, _IONBF, (size_t) NULL );
 	
 	/* Save the master's name */
-	gethostname(controlling_host_name,256);
+	gethostname(controlling_host_name,100);
 
 	/* Try to find the actual VM page size, if possible */
 #if defined (solaris) || defined (_HPUX_SOURCE) || defined (linux) || defined(IRIX) || defined (IRIX64)
@@ -1538,9 +1596,9 @@ char **argv;
 	for(ind=0;ind<MAXSTREAMS;ind++)
 		filearray[ind]=(char *)tfile;
 
-	base_time=(long)time_so_far();
+	/* base_time=(long)time_so_far(); */
 	myid=(long long)getpid(); 	/* save the master's PID */
-	get_resolution(); 		/* Get clock resolution */
+	/* get_resolution(); 		 Get clock resolution */
 	time_run = time(0);		/* Start a timer */
 	(void)find_external_mon(imon_start, imon_stop);
 
@@ -1554,9 +1612,10 @@ char **argv;
     	sprintf(splash[splash_line++],"\tContributors:William Norcott, Don Capps, Isom Crawford, Kirby Collins\n");
 	sprintf(splash[splash_line++],"\t             Al Slater, Scott Rhine, Mike Wisner, Ken Goss\n");
     	sprintf(splash[splash_line++],"\t             Steve Landherr, Brad Smith, Mark Kelly, Dr. Alain CYR,\n");
-    	sprintf(splash[splash_line++],"\t             Randy Dunlap, Mark Montague, Dan Million, \n");
-    	sprintf(splash[splash_line++],"\t             Jean-Marc Zucconi, Jeff Blomberg, Benny Halevy,\n");
-    	sprintf(splash[splash_line++],"\t             Erik Habbinga, Kris Strecker, Walter Wong.\n\n");
+    	sprintf(splash[splash_line++],"\t             Randy Dunlap, Mark Montague, Dan Million, Gavin Brebner,\n");
+    	sprintf(splash[splash_line++],"\t             Jean-Marc Zucconi, Jeff Blomberg, Benny Halevy, Dave Boone,\n");
+    	sprintf(splash[splash_line++],"\t             Erik Habbinga, Kris Strecker, Walter Wong, Joshua Root,\n");
+    	sprintf(splash[splash_line++],"\t             Fabrice Bacchella, Zhenghua Xue, Qin Li.\n\n");
 	sprintf(splash[splash_line++],"\tRun began: %s\n",ctime(&time_run));
 	argcsave=argc;
 	argvsave=argv;
@@ -1583,6 +1642,42 @@ char **argv;
 		~((long)cache_size-1));
 #endif
 	mainbuffer = buffer;
+
+	/* de-dup input buf */
+     	buffer1 = (char *) alloc_mem((long long)(MAXBUFFERSIZE + (2 * cache_size)),(int)0);
+	if(buffer1 == 0) {
+        	perror("Memory allocation failed:");
+        	exit(1);
+        }
+
+#ifdef _64BIT_ARCH_
+     	buffer1 = (char *) ((long long )(buffer1 + cache_size ) & 
+		~(cache_size-1));
+#else
+     	buffer1 = (char *) ((long)(buffer1 + cache_size ) & 
+		~((long)cache_size-1));
+#endif
+	dedup_ibuf = buffer1;
+	touch_dedup(buffer1, MAXBUFFERSIZE);
+
+#ifdef FOOB
+	/* de-dup temp buf */
+     	buffer1 = (char *) alloc_mem((long long)(MAXBUFFERSIZE + (2 * cache_size)),(int)0);
+	if(buffer1 == 0) {
+        	perror("Memory allocation failed:");
+        	exit(1);
+        }
+
+#ifdef _64BIT_ARCH_
+     	buffer1 = (char *) ((long long )(buffer1 + cache_size ) & 
+		~(cache_size-1));
+#else
+     	buffer1 = (char *) ((long)(buffer1 + cache_size ) & 
+		~((long)cache_size-1));
+#endif
+#endif
+	dedup_temp = mainbuffer;
+
 	fetchon++;  /* By default, prefetch the CPU cache lines associated with the buffer */
   	strcpy(filename,default_filename); 	/* Init default filename */
   	sprintf(dummyfile[0],"%s.DUMMY",default_filename);
@@ -1645,14 +1740,14 @@ char **argv;
 #endif
 			async_flag++;
 			break;
-		case 'I':	/* Use VXFS direct advisory or O_DIRECT from Linux or AIX , or O_DIRECTIO for TRU64 */
+		case 'I':	/* Use VXFS direct advisory or O_DIRECT from Linux or AIX , or O_DIRECTIO for TRU64  or Solaris directio */
 #ifdef VXFS
 			direct_flag++;
 			sprintf(splash[splash_line++],"\tVxFS advanced feature SET_CACHE, VX_DIRECT enabled\n");
 			break;
 #endif
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined(__FreeBSD__) || defined(solaris)
 			direct_flag++;
 			sprintf(splash[splash_line++],"\tO_DIRECT feature enabled\n");
 			break;
@@ -1663,6 +1758,10 @@ char **argv;
 			break;
 #endif
 #else
+			break;
+#endif
+#if defined(Windows)
+			sprintf(splash[splash_line++],"\tO_DIRECTIO feature not available in Windows version.\n");
 			break;
 #endif
 		case 'B':	/* Use mmap file for test file */
@@ -2000,7 +2099,8 @@ char **argv;
 				num_child = 8;
 			if(num_child == 0)
 				num_child=1;
-			mint=maxt=num_child;
+                        t_range[t_count++]=num_child;
+                        maxt = (maxt>num_child?maxt:num_child);
 			trflag++;
 			if(Uflag)
 			{
@@ -2260,6 +2360,9 @@ char **argv;
 					client_iozone=0;
 					sprintf(splash[splash_line++],"\tNetwork distribution mode enabled.\n");
 					break;
+				case 'N':  /* turn off truncating the file before write test */
+					notruncate = 1;
+					break;
 				case 'u':	/* Set CPU utilization output flag */
 					cpuutilflag = 1;	/* only used if R(eport) flag is also set */
 					get_rusage_resolution();
@@ -2304,7 +2407,7 @@ char **argv;
 				case 't':  /* Speed code activated */
 					speed_code=1;
 					break;
-#if defined(_HPUX_SOURCE) || defined(linux)
+#if defined(_HPUX_SOURCE) || defined(linux) || defined(solaris)
 				case 'r':  /* Read sync too */
 					read_sync=1;
     					sprintf(splash[splash_line++],"\tRead & Write sync mode active.\n");
@@ -2361,6 +2464,18 @@ char **argv;
 					sprintf(splash[splash_line++],"\t>>> Sequential Mixed workload. <<<\n");
 					seq_mix=1;
 					break;
+ 				        /* Use an existing user file, that does
+					 not contain Iozone's pattern. Use file
+	                                 for testing, but read only, and no 
+                                         delete at the end of the test. Also, 
+                                         no pattern verification, but do touch
+                                         the pages. */
+				case 'E':  
+					sprintf(splash[splash_line++],"\t>>> No Verify mode. <<<\n");
+					sverify=2;
+					no_unlink=1;
+					no_write=1;
+					break;
 				case 'T':  /* Time stamps on */
 					L_flag=1;
 					break;
@@ -2406,6 +2521,84 @@ char **argv;
 					Kplus_flag=1;
 					sprintf(splash[splash_line++],"\tManual control of test 8. >>> Very Experimental. Sony special <<<\n");
 					break;
+				case 'w':  /* Argument is the percent of dedup */
+					   /* Sets size of dedup region across files */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+w takes an operand !!\n");
+					     exit(200);
+					}
+					dedup = atoi(subarg);
+					if(dedup <=0)
+						dedup = 0;
+					if(dedup >100)
+						dedup = 100;
+					sprintf(splash[splash_line++],"\tDedup activated %d percent.\n",dedup);
+					break;
+				case 'y':  /* Argument is the percent of interior dedup */
+					   /* Sets size of dedup region within and across files */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+y takes an operand !!\n");
+					     exit(200);
+					}
+					dedup_interior = atoi(subarg);
+					if(dedup_interior <0)
+						dedup_interior = 0;
+					if(dedup_interior >100)
+						dedup_interior = 100;
+					sprintf(splash[splash_line++],"\tDedupe within & across %d percent.\n",dedup_interior);
+					break;
+				case 'C':  /* Argument is the percent of dedupe within & !across */
+					   /* Sets size of dedup region within and !across files */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+C takes an operand !!\n");
+					     exit(200);
+					}
+					dedup_compress = atoi(subarg);
+					if(dedup_compress <0)
+						dedup_compress = 0;
+					if(dedup_compress >100)
+						dedup_compress = 100;
+					sprintf(splash[splash_line++],"\tDedupe within %d percent.\n",dedup_compress);
+					break;
+				case 'S':  /* Argument is the seed for dedup */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+S takes an operand !!\n");
+					     exit(200);
+					}
+					dedup_mseed = atoi(subarg);
+					if(dedup_mseed ==0)
+						dedup_mseed = 1;
+					sprintf(splash[splash_line++],"\tDedup manual seed %d .\n",dedup_mseed);
+					break;
+				case 'H':  /* Argument is hostname of the PIT */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+H takes operand !!\n");
+					     exit(200);
+					}
+					strcpy(pit_hostname,subarg);
+					sprintf(splash[splash_line++],"\tPIT_host %s\n",pit_hostname);
+					
+					break;
+				case 'P':  /* Argument is port of the PIT */
+					subarg=argv[optind++];
+					if(subarg==(char *)0)
+					{
+					     printf("-+P takes operand !!\n");
+					     exit(200);
+					}
+					strcpy(pit_service,subarg);
+					sprintf(splash[splash_line++],"\tPIT_port %s\n",pit_service);
+					break;
 				default:
 					printf("Unsupported Plus option -> %s <-\n",optarg);
 					exit(0);
@@ -2414,6 +2607,8 @@ char **argv;
 			break;
 		}
 	}
+	base_time=(long)time_so_far();
+	get_resolution(); 		/* Get clock resolution */
 	if(speed_code)
 	{
 		do_speed_check(client_iozone);
@@ -2648,17 +2843,47 @@ char **argv;
 		exit(19);
 	}
 #endif
+	if(no_write)
+	{
+	   if(!include_tflag)
+	   {
+	     printf("You must specify which tests ( -i # ) when using -+E\n");
+	     exit(19);
+	   }
+	}
 	if(include_tflag)
 	{
 		for(i=0;i<sizeof(func)/sizeof(char *);i++)
 			if(include_test[i])
 				include_mask|=(long long)(1<<i);
-			/*printf("%x",include_mask); */
+		/* printf(">> %llx",include_mask);  HERE */
 	}
-
+	if(no_write) /* Disable if any writer would disturbe existing file */
+	{
+	   if(include_test[0] || include_test[4] ||
+	      include_test[6] || include_test[8] || include_test[9] ||
+              include_test[11])
+	   {
+	      printf("You must disable any test that writes when using -+E\n");
+	      exit(20);
+	   }
+	}
+	if(no_write) /* User must specify the existing file name */
+	{
+	   if(!(fflag | mfflag))
+	   {
+	      printf("You must use -f or -F when using -+E\n");
+	      exit(20);
+	   }
+	}
 	if(h_flag && k_flag)
 	{
 		printf("\n\tCan not do both -H and -k\n");
+		exit(20);
+	}
+	if((dedup | dedup_interior) && diag_v)
+	{
+		printf("\n\tCan not do both -+d and -+w\n");
 		exit(20);
 	}
 		
@@ -3612,6 +3837,16 @@ waitout:
 	else
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_rwrite_test,xx);
 #else
@@ -3847,6 +4082,16 @@ next0:
 	else
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_read_test,xx);
 #else
@@ -4072,6 +4317,16 @@ jumpend:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_rread_test,xx);
 #else
@@ -4302,6 +4557,16 @@ next1:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_reverse_read_test,xx);
 #else
@@ -4526,6 +4791,16 @@ next2:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_stride_read_test,xx);
 #else
@@ -4751,6 +5026,16 @@ next3:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_ranread_test,xx);
 #else
@@ -4971,6 +5256,16 @@ next4:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_mix_test,xx);
 #else
@@ -5142,7 +5437,7 @@ next5:
 	/*** random writer throughput tests  **************************/
 	/**************************************************************/
 	if(include_tflag)
-		if(!(include_mask & (long long)RANDOM_RW_MASK))
+		if(!(include_mask & (long long)RANDOM_RW_MASK) || no_write)
 			goto next6;
 	
 	toutputindex++;
@@ -5191,6 +5486,16 @@ next5:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_ranwrite_test,xx);
 #else
@@ -5414,6 +5719,16 @@ next6:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_pwrite_test,xx);
 #else
@@ -5639,6 +5954,16 @@ next7:
 	{
 	   for(xx = 0; xx< num_child ; xx++){	/* Create the children */
 		chid=xx;
+		if(!barray[xx])
+		{
+			barray[xx]=(char *) alloc_mem((long long)(MAXBUFFERSIZE+cache_size),(int)0);
+			if(barray[xx] == 0) {
+        		   perror("Memory allocation failed:");
+        		   exit(26);
+        		}
+     			barray[xx] =(char *)(((long)barray[xx] + cache_size ) & 
+			~(cache_size-1));
+		}
 #ifdef _64BIT_ARCH_
 		childids[xx] = mythread_create( thread_pread_test,xx);
 #else
@@ -5953,16 +6278,27 @@ time_so_far()
 #ifdef Windows
    LARGE_INTEGER freq,counter;
    double wintime,bigcounter;
-	/* For Windows the time_of_day() is useless. It increments in 55 milli second   */
-	/* increments. By using the Win32api one can get access to the high performance */
-	/* measurement interfaces. With this one can get back into the 8 to 9  		*/
-	/* microsecond resolution.							*/
+   struct timeval tp;
+   /* For Windows the time_of_day() is useless. It increments in 55 milli 
+    * second increments. By using the Win32api one can get access to the 
+    * high performance measurement interfaces. With this one can get back 
+    * into the 8 to 9 microsecond resolution.
+    */
+   if(pit_hostname[0]){
+     if (pit_gettimeofday(&tp, (struct timezone *) NULL, pit_hostname, 
+ 		pit_service) == -1)
+         perror("pit_gettimeofday");
+  	 return ((double) (tp.tv_sec)) + (((double) tp.tv_usec) * 0.000001 );
+   }
+   else
+   {
         QueryPerformanceFrequency(&freq);
         QueryPerformanceCounter(&counter);
         bigcounter=(double)counter.HighPart *(double)0xffffffff +
                 (double)counter.LowPart;
         wintime = (double)(bigcounter/(double)freq.LowPart);
         return((double)wintime);
+   }
 #else
 #if defined (OSFV4) || defined(OSFV3) || defined(OSFV5)
   struct timespec gp;
@@ -5974,10 +6310,17 @@ time_so_far()
 #else
   struct timeval tp;
 
-  if (gettimeofday(&tp, (struct timezone *) NULL) == -1)
-    perror("gettimeofday");
-  return ((double) (tp.tv_sec)) +
-    (((double) tp.tv_usec) * 0.000001 );
+  if(pit_hostname[0]){
+     if (pit_gettimeofday(&tp, (struct timezone *) NULL, pit_hostname, pit_service) == -1)
+         perror("pit_gettimeofday");
+  	 return ((double) (tp.tv_sec)) + (((double) tp.tv_usec) * 0.000001 );
+  }
+  else
+  {
+     if (gettimeofday(&tp, (struct timezone *) NULL) == -1)
+         perror("gettimeofday");
+  	 return ((double) (tp.tv_sec)) + (((double) tp.tv_usec) * 0.000001 );
+  }
 #endif
 #endif
 }
@@ -6036,6 +6379,7 @@ char sverify;
 {
 	volatile unsigned long long *where;
 	volatile unsigned long long dummy;
+	long *de_ibuf, *de_obuf;
 	long long j,k;
 	off64_t file_position=0;
 	off64_t i;
@@ -6050,6 +6394,8 @@ char sverify;
 	unsigned long long c= 0x01010101;
 	unsigned long long d = 0x01010101;
 	unsigned long long pattern_buf;
+	int lite = 1;	/* Only validate 1 long when running 
+			   de-deup validation */
 
 	value = (a<<32) | b;
 	value1 = (c<<32) | d;
@@ -6061,6 +6407,41 @@ char sverify;
 		xx2=(long long)0;
 	mpattern=patt;
 	pattern_buf=patt;
+	where=(unsigned long long *)buffer;
+	if(sverify == 2)
+	{
+	  for(i=0;i<(length);i+=page_size)
+	  {
+	      dummy = *where;
+	      where+=(page_size/sizeof(long long));
+	  }
+	  return(0);
+	}
+	if(dedup)
+	{
+		gen_new_buf((char *)dedup_ibuf,(char *)dedup_temp, (long)recnum, (int)length,(int)dedup, (int) dedup_interior, dedup_compress, 0);
+		de_ibuf = (long *)buffer;
+		de_obuf = (long *)dedup_temp;
+		if(lite)	/* short touch to reduce intrusion */
+			length = (long) sizeof(long);
+		for(i=0;i<length/sizeof(long);i++)
+		{
+			if(de_ibuf[i]!= de_obuf[i])
+			{
+				if(!silent)
+#ifdef NO_PRINT_LLD
+				   printf("\nDedup mis-compare at %ld\n",
+					(long long)((recnum*recsize)+(i*sizeof(long))) );
+#else
+				   printf("\nDedup mis-compare at %lld\n",
+					(long long)((recnum*recsize)+(i*sizeof(long))) );
+				   printf("Found %.lx Expecting %.lx \n",de_ibuf[i], de_obuf[i]);
+#endif
+				return(1);
+			}
+		}
+		return(0);
+	}
 	if(diag_v)
 	{
 		if(no_unlink)
@@ -6079,15 +6460,6 @@ char sverify;
 	if(!verify)
 		printf("\nOOPS You have entered verify_buffer unexpectedly !!! \n");
 
-	if(sverify == 2)
-	{
-	  for(i=0;i<(length);i+=page_size)
-	  {
-	      dummy = *where;
-	      where+=(page_size/sizeof(long long));
-	  }
-	  return(0);
-	}
 	if(sverify == 1)
 	{
 	  for(i=0;i<(length);i+=page_size)
@@ -6199,6 +6571,11 @@ char sverify;
 	x=0;
 	mpattern=pattern;
 	/* printf("Fill: Sverify %d verify %d diag_v %d\n",sverify,verify,diag_v);*/
+	if(dedup)
+	{
+		gen_new_buf((char *)dedup_ibuf,(char *)buffer, (long)recnum, (int)length,(int)dedup, (int) dedup_interior, dedup_compress, 1);
+		return;
+	}
 	if(diag_v)
 	{
 		/*if(client_iozone)
@@ -6395,13 +6772,13 @@ long long *data2;
 	if(odsync)
 		file_flags |= O_DSYNC;
 #endif
-#if defined(_HPUX_SOURCE) || defined(linux) || defined(freebsd) || defined(__DragonFly__)
+#if defined(_HPUX_SOURCE) || defined(linux) || defined(__FreeBSD__) || defined(__DragonFly__)
 	if(read_sync)
 		file_flags |=O_RSYNC|O_SYNC;
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		file_flags |=O_DIRECT;
 #endif
@@ -6433,18 +6810,22 @@ long long *data2;
                 perror("open");
                 exit(44);
         }
-	if(check_filename(filename))
-        {
-          wval=ftruncate(fd,0);
-          if(wval < 0)
-          {
-                printf("\n\nSanity check failed. Do not deploy this filesystem in a production environment !\n");
-                exit(44);
-          }
-	  close(fd);
-	}
-	if(check_filename(filename))
-           unlink(filename);
+		if(!notruncate)
+		{
+			if(check_filename(filename))
+			{
+				wval=ftruncate(fd,0);
+				if(wval < 0)
+				{
+					printf("\n\nSanity check failed. Do not deploy this filesystem in a production environment !\n");
+					exit(44);
+				}
+			}
+			close(fd);
+
+			if(check_filename(filename))
+				unlink(filename);
+		}
 /* Sanity check */
 
 	if(noretest)
@@ -6478,13 +6859,16 @@ long long *data2;
 		        else
 		        {
 #endif
-	  		   if((fd = I_CREAT(filename, 0640))<0)
-	  		   {
-				printf("\nCan not create temp file: %s\n", 
-					filename);
-				perror("creat");
-				exit(42);
-	  		   }
+				if(!notruncate)
+				{
+	  		   		if((fd = I_CREAT(filename, 0640))<0)
+	  		   		{
+						printf("\nCan not create temp file: %s\n", 
+							filename);
+						perror("creat");
+						exit(42);
+	  		   		}
+				}
 #if defined(Windows)
 			}
 #endif
@@ -6537,6 +6921,19 @@ long long *data2;
 			}
 		}
 #endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
+#endif
+
 		if(file_lock)
 			if(mylockf((int) fd, (int) 1, (int)0)!=0)
 				printf("File lock for write failed. %d\n",errno);
@@ -6572,7 +6969,7 @@ long long *data2;
 		pbuff=mainbuffer;
 		if(fetchon)
 			fetchit(pbuff,reclen);
-		if(verify)
+		if(verify || dedup || dedup_interior)
 			fill_buffer(pbuff,reclen,(long long)pattern,sverify,(long long)0);
 		starttime1 = time_so_far();
 #ifdef unix
@@ -6616,7 +7013,7 @@ long long *data2;
 				mylockr((int) fd, (int) 1, (int)0,
 				  lock_offset, reclen);
 			}
-			if(verify && diag_v)
+			if((verify && diag_v) || dedup || dedup_interior)
 				fill_buffer(pbuff,reclen,(long long)pattern,sverify,i);
 			if(compute_flag)
 				compute_val+=do_compute(compute_time);
@@ -6626,14 +7023,14 @@ long long *data2;
 				if(Index > (MAXBUFFERSIZE-reclen))
 					Index=0;
 				pbuff = mbuffer + Index;	
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(pbuff,reclen,(long long)pattern,sverify,(long long)0);
 			}
 			if(async_flag && no_copy_flag)
 			{
 				free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 				nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 				if(purge)
 					purgeit(nbuff,reclen);
@@ -6924,9 +7321,14 @@ long long *data2;
 			purge_buffer_cache();
 		}
 		if(j==0)
-			how="w+";
+		{
+			if(check_filename(filename))
+				how="r+"; /* file exists, don't create and zero a new one. */
+			else
+				how="w+"; /* file doesn't exist. create it. */
+		}
 		else
-			how="r+";
+			how="r+"; /* re-tests should error out if file does not exist. */
 #ifdef IRIX64
 		if((stream=(FILE *)fopen(filename,how)) == 0)
 		{
@@ -6949,13 +7351,13 @@ long long *data2;
 			exit(49);
 		}
 #endif
-		fd=I_OPEN(filename,O_RDWR,0640);
+		fd=fileno(stream);
 		fsync(fd);
 		setvbuf(stream,stdio_buf,_IOFBF,reclen);
 		buffer=mainbuffer;
 		if(fetchon)
 			fetchit(buffer,reclen);
-		if(verify)
+		if(verify || dedup || dedup_interior)
 			fill_buffer(buffer,reclen,(long long)pattern,sverify,(long long)0);
 		starttime1 = time_so_far();
 		compute_val=(double)0;
@@ -6969,7 +7371,7 @@ long long *data2;
 					Index=0;
 				buffer = mbuffer + Index;	
 			}
-			if(verify & diag_v)
+			if((verify & diag_v) || dedup || dedup_interior)
 				fill_buffer(buffer,reclen,(long long)pattern,sverify,i);
 			if(purge)
 				purgeit(buffer,reclen);
@@ -7020,21 +7422,16 @@ long long *data2;
 				perror("fflush");
 				signal_handler();
 			}
+			wval=fsync(fd);
+			if(wval==-1){
+				perror("fsync");
+				signal_handler();
+			}
 			wval=fclose(stream);
 			if(wval==-1){
 				perror("fclose");
 				signal_handler();
 			}
-		}
-		wval=fsync(fd);
-		if(wval==-1){
-			perror("fsync");
-			signal_handler();
-		}
-		wval=close(fd);
-		if(wval==-1){
-			perror("close");
-			signal_handler();
 		}
 
 		if(cpuutilflag)
@@ -7353,7 +7750,7 @@ long long *data1,*data2;
 		open_flags |=O_RSYNC|O_SYNC;
 #endif
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		open_flags |=O_DIRECT;
 #endif
@@ -7447,6 +7844,18 @@ long long *data1,*data2;
 				exit(3);
 			}
 		}
+#endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
 #endif
 		if(file_lock)
 			if(mylockf((int) fd, (int) 1, (int)1) != 0)
@@ -7803,9 +8212,9 @@ long long *data1, *data2;
 	double walltime[2], cputime[2];
 	double compute_val = (double)0;
 #if defined (bsd4_2) || defined(Windows)
-	long long big_rand;
 	long long rand1,rand2,rand3;
 #endif
+	unsigned long long big_rand;
 	long long j;
 	off64_t i,numrecs64;
 	long long Index=0;
@@ -7817,7 +8226,8 @@ long long *data1, *data2;
 	char *wmaddr,*nbuff;
 	char *maddr,*free_addr;
 	int fd,wval;
-#ifdef VXFS
+	long long *recnum= 0;
+#if defined(VXFS) || defined(solaris)
 	int test_foo=0;
 #endif
 #ifdef ASYNC_IO
@@ -7825,12 +8235,67 @@ long long *data1, *data2;
 #else
 	long long *gc=0;
 #endif
+#ifdef MERSENNE
+    unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL};
+    unsigned long long length=4;
+#endif
 
 	maddr=free_addr=0;
 	numrecs64 = (kilo64*1024)/reclen;
+#ifdef MERSENNE
+       init_by_array64(init, length);
+#else
+#ifdef bsd4_2
+        srand(0);
+#else
+#ifdef Windows
+        srand(0);
+#else
+        srand48(0);
+#endif
+#endif
+#endif
+        recnum = (long long *)malloc(sizeof(*recnum)*numrecs64);
+        if (recnum){
+             /* pre-compute random sequence based on 
+		Fischer-Yates (Knuth) card shuffle */
+            for(i = 0; i < numrecs64; i++){
+                recnum[i] = i;
+            }
+            for(i = 0; i < numrecs64; i++) {
+                long long tmp;
+#ifdef MERSENNE
+      	       big_rand=genrand64_int64();
+#else
+#ifdef bsd4_2
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+#ifdef Windows
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+               big_rand = lrand48();
+#endif
+#endif
+#endif
+               big_rand = big_rand%numrecs64;
+               tmp = recnum[i];
+               recnum[i] = recnum[big_rand];
+               recnum[big_rand] = tmp;
+            }
+        }
+	else
+	{
+		fprintf(stderr,"Random uniqueness fallback.\n");
+	}
 	flags = O_RDWR;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -7853,9 +8318,12 @@ long long *data1, *data2;
 	filebytes64 = numrecs64*reclen;
 	for( j=0; j<2; j++ )
 	{
-
-	     if(cpuutilflag)
-	     {
+		if(j==0)
+			flags |=O_CREAT;
+		if (no_write && (j == 1))
+			continue;
+		if(cpuutilflag)
+		{
 		     walltime[j] = time_so_far();
 		     cputime[j]  = cputime_so_far();
 	     }
@@ -7886,6 +8354,18 @@ long long *data1, *data2;
 			}
 		}
 #endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
+#endif
 	     if(mmapflag)
 	     {
 			maddr=(char *)initfile(fd,filebytes64,0,PROT_READ|PROT_WRITE);
@@ -7893,6 +8373,9 @@ long long *data1, *data2;
 	     nbuff=mainbuffer;
 	     if(fetchon)
 		   fetchit(nbuff,reclen);
+#ifdef MERSENNE
+    	    init_by_array64(init, length);
+#else
 #ifdef bsd4_2
 	     srand(0);
 #else
@@ -7900,6 +8383,7 @@ long long *data1, *data2;
              srand(0);
 #else
              srand48(0);
+#endif
 #endif
 #endif
 	     compute_val=(double)0;
@@ -7917,23 +8401,35 @@ long long *data1, *data2;
                         }
 			if(purge)
 				purgeit(nbuff,reclen);
+                        if (recnum) {
+				offset64 = reclen * (long long)recnum[i];
+                        }
+			else
+			{
+
+#ifdef MERSENNE
+      			   big_rand =genrand64_int64();
+			   offset64 = reclen * (big_rand%numrecs64);
+#else
 #ifdef bsd4_2
-			rand1=(long long)rand();
-			rand2=(long long)rand();
-			rand3=(long long)rand();
-			big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-                        offset64 = reclen * (big_rand%numrecs64);
+			   rand1=(long long)rand();
+			   rand2=(long long)rand();
+			   rand3=(long long)rand();
+			   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+                           offset64 = reclen * (big_rand%numrecs64);
 #else
 #ifdef Windows
-			rand1=(long long)rand();
-			rand2=(long long)rand();
-			rand3=(long long)rand();
-			big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-                        offset64 = reclen * (big_rand%numrecs64);
+			   rand1=(long long)rand();
+			   rand2=(long long)rand();
+			   rand3=(long long)rand();
+			   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+                           offset64 = reclen * (big_rand%numrecs64);
 #else
-			offset64 = reclen * (lrand48()%numrecs64);
+			   offset64 = reclen * (lrand48()%numrecs64);
 #endif
 #endif
+#endif
+			}
 
 			if( !(h_flag || k_flag || mmapflag))
 			{
@@ -8007,7 +8503,7 @@ long long *data1, *data2;
 	     }
 	     else
 	     {
-			if(verify)
+			if(verify || dedup || dedup_interior)
 				fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 			for(i=0; i<numrecs64; i++) 
 			{
@@ -8020,34 +8516,40 @@ long long *data1, *data2;
                                	         Index=0;
                                	    nbuff = mbuffer + Index;
                         	}
+                                if (recnum) {
+				  offset64 = reclen * (long long)recnum[i];
+                                }
+			        else
+			        {
 #ifdef bsd4_2
-				rand1=(long long)rand();
-				rand2=(long long)rand();
-				rand3=(long long)rand();
-				big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-				offset64 = reclen * (big_rand%numrecs64);
+				  rand1=(long long)rand();
+				  rand2=(long long)rand();
+				  rand3=(long long)rand();
+				  big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+				  offset64 = reclen * (big_rand%numrecs64);
 #else
 #ifdef Windows
-				rand1=(long long)rand();
-				rand2=(long long)rand();
-				rand3=(long long)rand();
-				big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-				offset64 = reclen * (big_rand%numrecs64);
+				  rand1=(long long)rand();
+				  rand2=(long long)rand();
+				  rand3=(long long)rand();
+				  big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+				  offset64 = reclen * (big_rand%numrecs64);
 #else
-				offset64 = reclen * (lrand48()%numrecs64);
+				  offset64 = reclen * (lrand48()%numrecs64);
 #endif
 #endif
+				}
 				if(async_flag && no_copy_flag)
 				{
 					free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 					nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-					if(verify)
+					if(verify || dedup || dedup_interior)
 						fill_buffer(nbuff,reclen,(long long)pattern,sverify,offset64/reclen);
 				}
 				if(purge)
 					purgeit(nbuff,reclen);
 
-				if(verify & diag_v)
+				if((verify & diag_v) || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,offset64/reclen);
 
 				if (!(h_flag || k_flag || mmapflag))
@@ -8187,18 +8689,23 @@ long long *data1, *data2;
 	}
         for(j=0;j<2;j++)
         {
-		if(MS_flag)
-		{
-			randreadrate[j]=1000000.0*(randreadtime[j] / (double)filebytes64);
-			continue;
-		}
+	    if(no_write && (j==1))
+	    {
+	        randreadrate[1] = 0.0;
+		continue;
+	    }
+	    if(MS_flag)
+	    {
+		randreadrate[j]=1000000.0*(randreadtime[j] / (double)filebytes64);
+		continue;
+	    }
             else
             {
                   randreadrate[j] = 
 		      (unsigned long long) ((double) filebytes64 / randreadtime[j]);
             }
-		if(!(OPS_flag || MS_flag))
-			randreadrate[j] >>= 10;
+	    if(!(OPS_flag || MS_flag))
+		randreadrate[j] >>= 10;
 	}
 	/* Must save walltime & cputime before calling store_value() for each/any cell.*/
         if(cpuutilflag)
@@ -8216,6 +8723,8 @@ long long *data1, *data2;
 	if(!silent) printf("%8lld",randreadrate[1]);
 	if(!silent) fflush(stdout);
 #endif
+	if(recnum)
+		free(recnum);
 }
 
 /************************************************************************/
@@ -8246,7 +8755,7 @@ long long *data1,*data2;
 	volatile char *buffer1;
 	int ltest;
 	char *nbuff;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo=0;
 #endif
 #ifdef ASYNC_IO
@@ -8258,7 +8767,7 @@ long long *data1,*data2;
 	maddr=wmaddr=0;
 	open_flags=O_RDONLY;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		open_flags |=O_DIRECT;
 #endif
@@ -8311,6 +8820,18 @@ long long *data1,*data2;
 				exit(3);
 			}
 		}
+#endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
 #endif
 		if(mmapflag)
 		{
@@ -8526,7 +9047,7 @@ long long *data1,*data2;
 	int fd,wval;
 	char *maddr;
 	char *wmaddr,*free_addr,*nbuff;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo=0;
 #endif
 #ifdef ASYNC_IO
@@ -8542,7 +9063,7 @@ long long *data1,*data2;
 /*	flags = O_RDWR|O_CREAT|O_TRUNC;*/
 	flags = O_RDWR|O_CREAT;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -8591,6 +9112,18 @@ long long *data1,*data2;
 		}
 	}
 #endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
+#endif
 	if(mmapflag)
 	{
 		maddr=(char *)initfile(fd,filebytes64,1,PROT_READ|PROT_WRITE);
@@ -8622,7 +9155,7 @@ long long *data1,*data2;
 		signal_handler();
 	}
 	*/
-	if(verify)
+	if(verify || dedup || dedup_interior)
 		fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 	starttime1 = time_so_far();
 	if(cpuutilflag)
@@ -8650,16 +9183,16 @@ long long *data1,*data2;
 		{
 			free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 			nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-			if(verify)
+			if(verify || dedup || dedup_interior)
 				fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 		}
-		if(verify & diag_v)
+		if((verify & diag_v) || dedup || dedup_interior)
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 		if(purge)
 			purgeit(nbuff,reclen);
 		if(mmapflag)
 		{
-			wmaddr = &maddr[0];
+			wmaddr = &maddr[i*reclen];
 			fill_area((long long*)nbuff,(long long*)wmaddr,(long long)reclen);
 			if(!mmapnsflag)
 			{
@@ -8794,9 +9327,9 @@ long long *data1,*data2;
 		store_times(walltime, cputime);
 	store_value((off64_t)writeinrate);
 #ifdef NO_PRINT_LLD
-	if(!silent) printf("%8ld",writeinrate);
+	if(!silent) printf(" %8ld",writeinrate);
 #else
-	if(!silent) printf("%8lld",writeinrate);
+	if(!silent) printf(" %8lld",writeinrate);
 #endif
 	if(!silent) fflush(stdout);
 	if(restf)
@@ -8833,7 +9366,7 @@ long long *data1, *data2;
 	char *nbuff;
 	char *maddr;
 	char *wmaddr;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo=0;
 #endif
 #ifdef ASYNC_IO
@@ -8846,7 +9379,7 @@ long long *data1, *data2;
 	nbuff=maddr=wmaddr=0;
 	open_flags=O_RDONLY;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		open_flags |=O_DIRECT;
 #endif
@@ -8889,6 +9422,18 @@ long long *data1, *data2;
 			exit(3);
 		}
 	}
+#endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
 #endif
 	if(mmapflag)
 	{
@@ -9102,9 +9647,9 @@ long long *data1, *data2;
 		store_times(walltime, cputime);
 	store_value((off64_t)strideinrate);
 #ifdef NO_PRINT_LLD
-	if(!silent) printf("%8ld",strideinrate);
+	if(!silent) printf(" %8ld",strideinrate);
 #else
-	if(!silent) printf("%8lld",strideinrate);
+	if(!silent) printf(" %8lld",strideinrate);
 #endif
 	if(!silent) fflush(stdout);
 	if(restf)
@@ -9138,7 +9683,7 @@ long long *data1,*data2;
 	off64_t numrecs64,traj_offset;
 	off64_t lock_offset=0;
 	long long traj_size;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo=0;
 #endif
 	char *nbuff;
@@ -9174,7 +9719,7 @@ long long *data1,*data2;
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags_here |=O_DIRECT;
 #endif
@@ -9183,14 +9728,14 @@ long long *data1,*data2;
 		flags_here |=O_DIRECTIO;
 #endif
 #endif
-	if(check_filename(filename))
-		unlink(filename);
 	if(noretest)
 		ltest=1;
 	else
 		ltest=2;
 	for( j=0; j<ltest; j++)
 	{
+		if(j==0)
+			flags_here |=O_CREAT;
 		if(cpuutilflag)
 		{
 			walltime[j] = time_so_far();
@@ -9200,66 +9745,44 @@ long long *data1,*data2;
 		{
 			purge_buffer_cache();
 		}
-		if( j==0 )
+		if((fd = I_OPEN(filename, (int)flags_here,0640))<0)
 		{
-		  	if((fd = I_CREAT(filename, 0640))<0)
-		  	{
-				printf("\nCan not create temp file: %s\n", 
-					filename);
-				perror("creat");
-				exit(95);
-		  	}
-			close(fd);
-			if((fd = I_OPEN(filename, (int)flags_here,0))<0)
-			{
-				printf("\nCan not open temp file: %s\n", 
-					filename);
-				perror("open");
-				exit(97);
-			}
-#ifdef VXFS
-			if(direct_flag)
-			{
-				ioctl(fd,VX_SETCACHE,VX_DIRECT);
-				ioctl(fd,VX_GETCACHE,&test_foo);
-				if(test_foo == 0)
-				{
-					if(!client_iozone)
-					  printf("\nVxFS advanced setcache feature not available.\n");
-					exit(3);
-				}
-			}
-#endif
+			printf("\nCan not open temp file: %s\n", 
+				filename);
+			perror("open");
+			exit(97);
 		}
-		else
+#ifdef VXFS
+		if(direct_flag)
 		{
-			if((fd = I_OPEN(filename, (int)flags_here,0))<0)
+			ioctl(fd,VX_SETCACHE,VX_DIRECT);
+			ioctl(fd,VX_GETCACHE,&test_foo);
+			if(test_foo == 0)
 			{
-				printf("\nCan not open temp file: %s\n", 
-					filename);
-				perror("open");
-				exit(99);
+				if(!client_iozone)
+				  printf("\nVxFS advanced setcache feature not available.\n");
+				exit(3);
 			}
-#ifdef VXFS
-			if(direct_flag)
-			{
-				ioctl(fd,VX_SETCACHE,VX_DIRECT);
-				ioctl(fd,VX_GETCACHE,&test_foo);
-				if(test_foo == 0)
-				{
-					if(!client_iozone)
-					  printf("\nVxFS advanced setcache feature not available.\n");
-					exit(3);
-				}
-			}
-#endif
 		}
+#endif
+#if defined(solaris)
+		if(direct_flag)
+		{
+			test_foo = directio(fd, DIRECTIO_ON);
+			if(test_foo != 0)
+			{
+				if(!client_iozone)
+					printf("\ndirectio not available.\n");
+				exit(3);
+			}
+		}
+#endif
 		fsync(fd);
 		nbuff=mainbuffer;
 		mbuffer=mainbuffer;
 		if(fetchon)
 			fetchit(nbuff,reclen);
-		if(verify)
+		if(verify || dedup || dedup_interior)
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 		starttime1 = time_so_far();
 	        compute_val=(double)0;
@@ -9290,7 +9813,7 @@ long long *data1,*data2;
                                         Index=0;
                                 nbuff = mbuffer + Index;
                         }
-			if(verify && diag_v)
+			if((verify && diag_v) || dedup || dedup_interior)
 				fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 			if(purge)
 				purgeit(nbuff,reclen);
@@ -9436,7 +9959,7 @@ long long *data1, *data2;
 	int ltest;
 	off64_t traj_offset;
 	long long traj_size;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	char *nbuff;
@@ -9445,7 +9968,7 @@ long long *data1, *data2;
 	nbuff=mainbuffer;
 	open_flags=O_RDONLY;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		open_flags |=O_DIRECT;
 #endif
@@ -9454,7 +9977,7 @@ long long *data1, *data2;
 		open_flags |=O_DIRECTIO;
 #endif
 #endif
-#if defined(_HPUX_SOURCE) || defined(linux) || defined(freebsd) || defined(__DragonFly__)
+#if defined(_HPUX_SOURCE) || defined(linux) || defined(__FreeBSD__) || defined(__DragonFly__)
 	if(read_sync)
 		open_flags |=O_RSYNC|O_SYNC;
 #endif
@@ -9503,6 +10026,18 @@ long long *data1, *data2;
 				exit(3);
 			}
 		}
+#endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
 #endif
 		nbuff=mainbuffer;
 		mbuffer=mainbuffer;
@@ -9667,11 +10202,14 @@ long long *data1,*data2;
 	off64_t filebytes64,i;
 	off64_t numrecs64;
 	int fd,ltest;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	long long flags_here;
 	char *nbuff;
+#ifdef MERSENNE
+        unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL}, length=4;
+#endif
 
 	numrecs64 = (kilos64*1024)/reclen;
 	filebytes64 = numrecs64*reclen;
@@ -9691,7 +10229,7 @@ long long *data1,*data2;
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags_here |=O_DIRECT;
 #endif
@@ -9708,6 +10246,8 @@ long long *data1,*data2;
 
 	for( j=0; j<ltest; j++)
 	{
+		if(j==0)
+			flags_here |=O_CREAT;
 		if(cpuutilflag)
 		{
 			walltime[j] = time_so_far();
@@ -9717,59 +10257,38 @@ long long *data1,*data2;
 		{
 			purge_buffer_cache();
 		}
-		if( j==0 )
+		if((fd = I_OPEN(filename, (int)flags_here,0640))<0)
 		{
-		  	if((fd = I_CREAT(filename, 0640))<0)
-		  	{
-				printf("\nCan not create temp file: %s\n", 
-					filename);
-				perror("creat");
-				exit(107);
-		  	}
-			if((fd = I_OPEN(filename, (int)flags_here,0))<0)
-			{
-				printf("\nCan not open temp file: %s\n", 
-					filename);
-				perror("open");
-				exit(109);
-			}
-#ifdef VXFS
-			if(direct_flag)
-			{
-				ioctl(fd,VX_SETCACHE,VX_DIRECT);
-				ioctl(fd,VX_GETCACHE,&test_foo);
-				if(test_foo == 0)
-				{
-					if(!client_iozone)
-					  printf("\nVxFS advanced setcache feature not available.\n");
-					exit(3);
-				}
-			}
-#endif
+			printf("\nCan not open temp file: %s\n", 
+				filename);
+			perror("open");
+			exit(109);
 		}
-		else
+#ifdef VXFS
+		if(direct_flag)
 		{
-			if((fd = I_OPEN(filename, (int)flags_here,0))<0)
+			ioctl(fd,VX_SETCACHE,VX_DIRECT);
+			ioctl(fd,VX_GETCACHE,&test_foo);
+			if(test_foo == 0)
 			{
-				printf("\nCan not open temp file: %s\n", 
-					filename);
-				perror("open");
-				exit(111);
+				if(!client_iozone)
+					printf("\nVxFS advanced setcache feature not available.\n");
+				exit(3);
 			}
-#ifdef VXFS
-			if(direct_flag)
-			{
-				ioctl(fd,VX_SETCACHE,VX_DIRECT);
-				ioctl(fd,VX_GETCACHE,&test_foo);
-				if(test_foo == 0)
-				{
-					if(!client_iozone)
-					  printf("\nVxFS advanced setcache feature not available.\n");
-					exit(3);
-				}
-			}
-#endif
 		}
+#endif
+#if defined(solaris)
+		if(direct_flag)
+		{
+			test_foo = directio(fd, DIRECTIO_ON);
+			if(test_foo != 0)
+			{
+				if(!client_iozone)
+					printf("\ndirectio not available.\n");
+				exit(3);
+			}
+		}
+#endif
 		nbuff=mainbuffer;
 		mbuffer=mainbuffer;
 		if(fetchon)
@@ -9778,6 +10297,9 @@ long long *data1,*data2;
                 if(numrecs64 < numvecs) numvecs=numrecs64;
                 if(MAXBUFFERSIZE/reclen < PVECMAX) numvecs=MAXBUFFERSIZE/reclen;
 
+#ifdef MERSENNE
+    	        init_by_array64(init, length);
+#else
 #ifdef bsd4_2
 	        srand(0);
 #else
@@ -9785,6 +10307,7 @@ long long *data1,*data2;
                 srand(0);
 #else
 	        srand48(0);
+#endif
 #endif
 #endif
 		starttime1 = time_so_far();
@@ -9799,7 +10322,7 @@ long long *data1,*data2;
 			{
 				piov[xx].piov_base = 
 					(caddr_t)(nbuff+(xx * reclen));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(piov[xx].piov_base,reclen,(long long)pattern,sverify,i);
 				piov[xx].piov_len = reclen;
 #ifdef PER_VECTOR_OFFSET
@@ -9942,7 +10465,7 @@ off64_t numrecs64;
 	long long numvecs;
 #if defined (bsd4_2) || defined(Windows)
 	long long rand1,rand2,rand3;
-	long long big_rand;
+	unsigned long long big_rand;
 #endif
 
 	numvecs = PVECMAX;
@@ -9954,6 +10477,10 @@ off64_t numrecs64;
 	{
 again:
 		found = 0;
+#ifdef MERSENNE
+                big_rand = genrand64_int64();
+		offset64 = reclen * (big_rand%numrecs64);
+#else
 #ifdef bsd4_2
 		rand1=(long long)rand();
 		rand2=(long long)rand();
@@ -9969,6 +10496,7 @@ again:
 		offset64 = reclen * (big_rand%numrecs64);
 #else
 		offset64 = reclen * (lrand48()%numrecs64);
+#endif
 #endif
 #endif
 
@@ -10014,14 +10542,17 @@ long long *data1,*data2;
 	unsigned long long preadvrate[2];
 	off64_t filebytes64;
 	int fd,open_flags,ltest;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	char *nbuff;
+#ifdef MERSENNE
+        unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL}, length=4;
+#endif
 
 	open_flags=O_RDONLY;
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		open_flags |=O_DIRECT;
 #endif
@@ -10074,6 +10605,18 @@ long long *data1,*data2;
 			}
 		}
 #endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
+#endif
 		nbuff=mainbuffer;
 		mbuffer=mainbuffer;
 		if(fetchon)
@@ -10082,6 +10625,9 @@ long long *data1,*data2;
                 if(numrecs64 < numvecs) numvecs=numrecs64;
                 if(MAXBUFFERSIZE/reclen < PVECMAX) numvecs=MAXBUFFERSIZE/reclen;
 
+#ifdef MERSENNE
+    	       init_by_array64(init, length);
+#else
 #ifdef bsd4_2
 	        srand(0);
 #else
@@ -10089,6 +10635,7 @@ long long *data1,*data2;
                 srand(0);
 #else
 	        srand48(0);
+#endif
 #endif
 #endif
 		starttime2 = time_so_far();
@@ -11096,9 +11643,25 @@ void multi_throughput_test(mint, maxt)
 long long mint, maxt;
 #endif
 {
+        int *t_rangeptr, *t_rangecurs;
+        int *saveptr = (int *)0;
+        int tofree = 0;
 	long long i;
-	for(i=mint;i<=maxt;i++){
-		num_child =i;
+        if(t_count == 0){
+            t_count = (int) maxt - mint + 1;
+            t_rangeptr = (int *) malloc((size_t)sizeof(int)*t_count);
+	    saveptr = t_rangeptr;
+            tofree = 1;
+            t_rangecurs = t_rangeptr;
+            for(i=mint; i<= maxt; i++) {
+                *(t_rangecurs++) = i;
+            }
+        }
+        else {
+            t_rangeptr = &t_range[0];
+        }
+	for(i=0; i < t_count; i++){
+		num_child = *(t_rangeptr++);
 		current_client_number=0; /* Need to start with 1 */
 		throughput_test();
 		current_x=0;
@@ -11106,6 +11669,8 @@ long long mint, maxt;
 	}
 	if(Rflag)
 		dump_throughput();
+        if(tofree)
+            free(saveptr);
 
 }
 
@@ -11122,12 +11687,31 @@ purge_buffer_cache()
 #endif
 {
 	char command[1024];
+	int ret,i;
 	strcpy(command,"umount ");
 	strcat(command, mountname);
-	system(command);
+        /*
+           umount might fail if the device is still busy, so
+           retry unmounting several times with increasing delays
+        */
+        for (i = 1; i < 10; ++i) {
+               ret = system(command);
+               if (ret == 0)
+                       break;
+               sleep(i); /* seconds */
+        }
 	strcpy(command,"mount ");
 	strcat(command, mountname);
-	system(command);
+	/*
+         mount might fail if the device is still busy, so
+         retry mounting several times with increasing delays
+        */
+        for (i = 1; i < 10; ++i) {
+              ret = system(command);
+              if (ret == 0)
+                   break;
+                   sleep(i); /* seconds */
+         }
 }
 
 /************************************************************************/
@@ -11167,7 +11751,7 @@ thread_write_test( x)
 	char *wmaddr,*free_addr;
 	char now_string[30];
 	int anwser,bind_cpu,wval;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	off64_t filebytes64;
@@ -11270,40 +11854,21 @@ thread_write_test( x)
 	/* Initial write throughput performance test. **********************/
 	/*******************************************************************/
 #if defined(Windows)
-       	if(unbuffered)
-        {
-        	hand=CreateFile(dummyfile[xx],
-		  GENERIC_READ|GENERIC_WRITE,
-	          FILE_SHARE_WRITE|FILE_SHARE_READ,
-		  NULL,OPEN_ALWAYS,FILE_FLAG_NO_BUFFERING|
-		  FILE_FLAG_WRITE_THROUGH|FILE_FLAG_POSIX_SEMANTICS,
-		  NULL);
-       	}
-        else
-        {
-#endif
-	  if((fd = I_CREAT(dummyfile[xx], 0640))<0)
-	  {
-		perror(dummyfile[xx]);
-		exit(123);
-	  }
-#if defined(Windows)
-	}
-#endif
-#if defined(Windows)
 	if(unbuffered)
-		CloseHandle(hand);
-	else
 	{
-#endif
-	  close(fd);
-#if defined(Windows)
+		hand=CreateFile(dummyfile[xx],
+			GENERIC_READ|GENERIC_WRITE,
+			FILE_SHARE_WRITE|FILE_SHARE_READ,
+			NULL,OPEN_ALWAYS,FILE_FLAG_NO_BUFFERING|
+			FILE_FLAG_WRITE_THROUGH|FILE_FLAG_POSIX_SEMANTICS,
+			NULL);
+		CloseHandle(hand);
 	}
 #endif
 	if(oflag)
-		flags=O_RDWR|O_SYNC;
+		flags=O_RDWR|O_SYNC|O_CREAT;
 	else
-		flags=O_RDWR;
+		flags=O_RDWR|O_CREAT;
 #if defined(O_DSYNC)
 	if(odsync)
 		flags |= O_DSYNC;
@@ -11314,7 +11879,7 @@ thread_write_test( x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -11336,8 +11901,11 @@ thread_write_test( x)
         else
         {
 #endif
-	if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
+	if((fd = I_OPEN(dummyfile[xx], (int)flags,0640))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		printf("\nCan not open temp file: %s\n", 
 			filename);
 		perror("open");
@@ -11359,6 +11927,18 @@ thread_write_test( x)
 		}
 	}
 #endif
+#if defined(solaris)
+               if(direct_flag)
+               {
+                       test_foo = directio(fd, DIRECTIO_ON);
+                       if(test_foo != 0)
+                       {
+                               if(!client_iozone)
+                                 printf("\ndirectio not available.\n");
+                               exit(3);
+                       }
+               }
+#endif
 #ifdef ASYNC_IO
 	if(async_flag)
 		async_init(&gc,fd,direct_flag);
@@ -11374,7 +11954,7 @@ thread_write_test( x)
 	}
 	if(fetchon)			/* Prefetch into processor cache */
 		fetchit(nbuff,reclen);
-	if(verify && !no_copy_flag)
+	if((verify && !no_copy_flag) || dedup || dedup_interior)
 		fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 
 	if(w_traj_flag)
@@ -11420,6 +12000,9 @@ thread_write_test( x)
 		thread_wqfd=fopen(tmpname,"a");
 		if(thread_wqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -11431,6 +12014,9 @@ thread_write_test( x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -11472,7 +12058,7 @@ thread_write_test( x)
 			mylockr((int) fd, (int) 1, (int)0,
 			  lock_offset, reclen);
 		}
-		if(verify && !no_copy_flag)
+		if((verify && !no_copy_flag) || dedup || dedup_interior)
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 		if(compute_flag)
 			compute_val+=do_compute(delay);
@@ -11496,6 +12082,9 @@ thread_write_test( x)
 			{
 			  if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
 			  {
+				client_error=errno;
+				if(distributed && client_iozone)
+					send_stop();
 				printf("\nCan not open temp file: %s\n", 
 					filename);
 				perror("open");
@@ -11552,7 +12141,7 @@ again:
 			     {
 				free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 				nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 			        async_write_no_copy(gc, (long long)fd, nbuff, reclen, (i*reclen), depth,free_addr);
 			     }
@@ -11830,7 +12419,7 @@ thread_pwrite_test( x)
 	char *wmaddr,*free_addr;
 	char now_string[30];
 	int anwser,bind_cpu,wval;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	off64_t filebytes64;
@@ -11932,16 +12521,22 @@ thread_pwrite_test( x)
 	/*******************************************************************/
 	/* Initial write throughput performance test. **********************/
 	/*******************************************************************/
-	if((fd = I_CREAT(dummyfile[xx], 0640))<0)
+	if(!notruncate)
 	{
-		perror(dummyfile[xx]);
-		exit(123);
+		if((fd = I_CREAT(dummyfile[xx], 0640))<0)
+		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
+			perror(dummyfile[xx]);
+			exit(123);
+		}
+		close(fd);
 	}
-	close(fd);
 	if(oflag)
-		flags=O_RDWR|O_SYNC;
+		flags=O_RDWR|O_SYNC|O_CREAT;
 	else
-		flags=O_RDWR;
+		flags=O_RDWR|O_CREAT;
 #if defined(O_DSYNC)
 	if(odsync)
 		flags |= O_DSYNC;
@@ -11952,7 +12547,7 @@ thread_pwrite_test( x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -11961,8 +12556,11 @@ thread_pwrite_test( x)
 		flags |=O_DIRECTIO;
 #endif
 #endif
-	if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
+	if((fd = I_OPEN(dummyfile[xx], (int)flags,0640))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		printf("\nCan not open temp file: %s\n", 
 			filename);
 		perror("open");
@@ -11981,6 +12579,18 @@ thread_pwrite_test( x)
 		}
 	}
 #endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
+#endif
 #ifdef ASYNC_IO
 	if(async_flag)
 		async_init(&gc,fd,direct_flag);
@@ -11996,7 +12606,7 @@ thread_pwrite_test( x)
 	}
 	if(fetchon)			/* Prefetch into processor cache */
 		fetchit(nbuff,reclen);
-	if(verify && !no_copy_flag)
+	if((verify && !no_copy_flag) || dedup || dedup_interior)
 		fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 
 	if(w_traj_flag)
@@ -12042,6 +12652,9 @@ thread_pwrite_test( x)
 		thread_wqfd=fopen(tmpname,"a");
 		if(thread_wqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -12053,6 +12666,9 @@ thread_pwrite_test( x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -12080,7 +12696,7 @@ thread_pwrite_test( x)
 			mylockr((int) fd, (int) 1, (int)0,
 			  lock_offset, reclen);
 		}
-		if(verify && !no_copy_flag)
+		if((verify && !no_copy_flag) || dedup || dedup_interior)
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 		if(compute_flag)
 			compute_val+=do_compute(delay);
@@ -12143,7 +12759,7 @@ again:
 			     {
 				free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 				nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 			        async_write_no_copy(gc, (long long)fd, nbuff, reclen, (traj_offset), depth,free_addr);
 			     }
@@ -12404,7 +13020,7 @@ thread_rwrite_test(x)
 	int anwser,bind_cpu,wval;
 	FILE *thread_rwqfd,*thread_Lwqfd;
 	char tmpname[256];
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -12510,7 +13126,7 @@ thread_rwrite_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -12535,6 +13151,9 @@ thread_rwrite_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 #ifdef NO_PRINT_LLD
 		printf("\nChild %ld\n",xx);
 #else
@@ -12560,6 +13179,18 @@ thread_rwrite_test(x)
 		}
 	}
 #endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
+#endif
 #ifdef ASYNC_IO
 	if(async_flag)
 		async_init(&gc,fd,direct_flag);
@@ -12579,6 +13210,9 @@ thread_rwrite_test(x)
 		if(thread_rwqfd==0)
 		{
 			printf("Unable to open %s\n",tmpname);
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			exit(40);
 		}
 		fprintf(thread_rwqfd,"Offset in Kbytes   Latency in microseconds  Transfer size in bytes\n");
@@ -12589,6 +13223,9 @@ thread_rwrite_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -12627,7 +13264,7 @@ thread_rwrite_test(x)
 	}
 	if(w_traj_flag)
 		rewind(w_traj_fd);
-	if(verify && !no_copy_flag)
+	if((verify && !no_copy_flag) || dedup || dedup_interior)
 		fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 	for(i=0; i<numrecs64; i++){
 		traj_offset= i*reclen ;
@@ -12665,7 +13302,7 @@ thread_rwrite_test(x)
 				printf("\nStop_flag 1\n");
 			break;
 		}
-		if(verify && !no_copy_flag)
+		if((verify && !no_copy_flag) || dedup || dedup_interior)
 		{
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 		}
@@ -12697,7 +13334,7 @@ printf("Chid: %lld Rewriting offset %lld for length of %lld\n",chid, i*reclen,re
 			     {
 				free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 				nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,i);
 			        async_write_no_copy(gc, (long long)fd, nbuff, reclen, (i*reclen), depth,free_addr);
 			     }
@@ -12927,7 +13564,7 @@ thread_read_test(x)
 	char now_string[30];
 	int anwser,bind_cpu;
 	long wval;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -13010,7 +13647,7 @@ thread_read_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -13035,6 +13672,9 @@ thread_read_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(130);
 	}
@@ -13057,6 +13697,18 @@ thread_read_test(x)
 			exit(3);
 		}
 	}
+#endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
 #endif
 	if(mmapflag)
 	{
@@ -13090,6 +13742,9 @@ thread_read_test(x)
 		thread_rqfd=fopen(tmpname,"a");
 		if(thread_rqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -13101,6 +13756,9 @@ thread_read_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -13455,7 +14113,7 @@ thread_pread_test(x)
 	char now_string[30];
 	volatile char *buffer1;
 	int anwser,bind_cpu;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -13538,7 +14196,7 @@ thread_pread_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -13549,6 +14207,9 @@ thread_pread_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], (int)flags,0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(130);
 	}
@@ -13568,6 +14229,18 @@ thread_pread_test(x)
 			exit(3);
 		}
 	}
+#endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
 #endif
 	if(mmapflag)
 	{
@@ -13601,6 +14274,9 @@ thread_pread_test(x)
 		thread_rqfd=fopen(tmpname,"a");
 		if(thread_rqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -13612,6 +14288,9 @@ thread_pread_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -13933,7 +14612,7 @@ thread_rread_test(x)
 	int anwser,bind_cpu;
 	long wval;
 	char tmpname[256];
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -14033,7 +14712,7 @@ thread_rread_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -14059,6 +14738,9 @@ thread_rread_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(135);
 	}
@@ -14082,6 +14764,18 @@ thread_rread_test(x)
 		}
 	}
 #endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
+#endif
 	if(mmapflag)
 	{
 		maddr=(char *)initfile(fd,(filebytes64),0,PROT_READ);
@@ -14096,6 +14790,9 @@ thread_rread_test(x)
                 thread_rrqfd=fopen(tmpname,"a");
                 if(thread_rrqfd==0)
                 {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
                         printf("Unable to open %s\n",tmpname);
                         exit(40);
                 }
@@ -14107,6 +14804,9 @@ thread_rread_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -14456,7 +15156,7 @@ thread_reverse_read_test(x)
 	char tmpname[256];
 	FILE *thread_revqfd=0;
 	FILE *thread_Lwqfd=0;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -14545,7 +15245,7 @@ thread_reverse_read_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -14568,6 +15268,9 @@ thread_reverse_read_test(x)
 
 	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(140);
 	}
@@ -14588,6 +15291,18 @@ thread_reverse_read_test(x)
 		}
 	}
 #endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
+#endif
 	if(mmapflag)
 	{
 		maddr=(char *)initfile(fd,(numrecs64*reclen),0,PROT_READ);
@@ -14600,6 +15315,9 @@ thread_reverse_read_test(x)
                 thread_revqfd=fopen(tmpname,"a");
                 if(thread_revqfd==0)
                 {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
                         printf("Unable to open %s\n",tmpname);
                         exit(40);
                 }
@@ -14611,6 +15329,9 @@ thread_reverse_read_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -14645,6 +15366,9 @@ thread_reverse_read_test(x)
 	  {
 	  	if((I_LSEEK( fd, -t_offset, SEEK_END ))<0)
 	  	{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			perror("lseek");
 			exit(142);
 	  	}
@@ -14653,6 +15377,9 @@ thread_reverse_read_test(x)
 	  {
 		if(I_LSEEK( fd, (numrecs64*reclen)-t_offset, SEEK_SET )<0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			perror("lseek");
 			exit(77);
 		}
@@ -14930,7 +15657,7 @@ thread_stride_read_test(x)
 	char now_string[30];
 	FILE *thread_strqfd=0;
 	FILE *thread_Lwqfd=0;
-#ifdef VXFS
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #ifdef ASYNC_IO
@@ -15018,7 +15745,7 @@ thread_stride_read_test(x)
 		flags |=O_RSYNC|O_SYNC;
 #endif
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -15041,6 +15768,9 @@ thread_stride_read_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(147);
 	}
@@ -15061,6 +15791,18 @@ thread_stride_read_test(x)
 		}
 	}
 #endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
+#endif
 
 	if(mmapflag)
 	{
@@ -15074,6 +15816,9 @@ thread_stride_read_test(x)
                 thread_strqfd=fopen(tmpname,"a");
                 if(thread_strqfd==0)
                 {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
                         printf("Unable to open %s\n",tmpname);
                         exit(40);
                 }
@@ -15085,6 +15830,9 @@ thread_stride_read_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -15240,6 +15988,9 @@ thread_stride_read_test(x)
 			{
 			  if(I_LSEEK(fd,current_position,SEEK_SET)<0)
 			  {
+				client_error=errno;
+				if(distributed && client_iozone)
+					send_stop();
 				perror("lseek");
 				exit(152);
 			  }
@@ -15252,6 +16003,9 @@ thread_stride_read_test(x)
 			{
 			  if(I_LSEEK(fd,current_position,SEEK_SET)<0)
 			  {
+				client_error=errno;
+				if(distributed && client_iozone)
+					send_stop();
 				perror("lseek");
 				exit(154);
 			  };
@@ -15482,20 +16236,75 @@ thread_ranread_test(x)
 	char now_string[30];
 	FILE *thread_randrfd=0;
 	FILE *thread_Lwqfd=0;
-#ifdef VXFS
+	long long *recnum=0;
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 	long long save_pos;
 #if defined (bsd4_2) || defined(Windows)
 	long long rand1,rand2,rand3;
-	long long big_rand;
 #endif
+	unsigned long long big_rand;
 #ifdef ASYNC_IO
 	struct cache *gc=0;
 #else
 	long long *gc=0;
 #endif
+#ifdef MERSENNE
+        unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL}, length=4;
+#endif
 
+#ifdef MERSENNE
+        init_by_array64(init, length);
+#else
+#ifdef bsd4_2
+        srand(0);
+#else
+#ifdef Windows
+        srand(0);
+#else
+        srand48(0);
+#endif
+#endif
+#endif
+        recnum = (long long *)malloc(sizeof(*recnum)*numrecs64);
+        if (recnum){
+             /* pre-compute random sequence based on 
+		Fischer-Yates (Knuth) card shuffle */
+            for(i = 0; i < numrecs64; i++){
+                recnum[i] = i;
+            }
+            for(i = 0; i < numrecs64; i++) {
+                long long tmp = recnum[i];
+#ifdef MERSENNE
+      	       big_rand = genrand64_int64();
+#else
+#ifdef bsd4_2
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+#ifdef Windows
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+               big_rand = lrand48();
+#endif
+#endif
+#endif
+               big_rand = big_rand%numrecs64;
+               tmp = recnum[i];
+               recnum[i] = recnum[big_rand];
+               recnum[big_rand] = tmp;
+            }
+        }
+	else
+	{
+		fprintf(stderr,"Random uniqueness fallback.\n");
+	}
 	if(compute_flag)
 		delay=compute_time;
 	thread_qtime_stop=thread_qtime_start=0;
@@ -15560,7 +16369,7 @@ thread_ranread_test(x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -15583,6 +16392,9 @@ thread_ranread_test(x)
 #endif
 	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		perror(dummyfile[xx]);
 		exit(156);
 	}
@@ -15603,6 +16415,18 @@ thread_ranread_test(x)
 			exit(3);
 		}
 	}
+#endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
 #endif
 
 	if(mmapflag)
@@ -15639,6 +16463,9 @@ thread_ranread_test(x)
                 thread_randrfd=fopen(tmpname,"a");
                 if(thread_randrfd==0)
                 {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
                         printf("Unable to open %s\n",tmpname);
                         exit(40);
                 }
@@ -15650,6 +16477,9 @@ thread_ranread_test(x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -15676,6 +16506,9 @@ thread_ranread_test(x)
 		cputime = cputime_so_far();
 	}
 
+#ifdef MERSENNE
+        init_by_array64(init, length);
+#else
 #ifdef bsd4_2
         srand(0);
 #else
@@ -15683,6 +16516,7 @@ thread_ranread_test(x)
         srand(0);
 #else
 	srand48(0);
+#endif
 #endif
 #endif
 	if(file_lock)
@@ -15699,28 +16533,40 @@ thread_ranread_test(x)
 		}
 		if(purge)
 			purgeit(nbuff,reclen);
+		if (recnum) {
+			current_offset = reclen * (long long)recnum[i];
+                } else {
+#ifdef MERSENNE
+                   big_rand = genrand64_int64();
+		   current_offset = (off64_t)reclen * (big_rand%numrecs64);
+#else
 #ifdef bsd4_2
-		rand1=(long long)rand();
-		rand2=(long long)rand();
-		rand3=(long long)rand();
-		big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-		current_offset = (off64_t)reclen * (big_rand%numrecs64);
+		   rand1=(long long)rand();
+		   rand2=(long long)rand();
+		   rand3=(long long)rand();
+		   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+		   current_offset = (off64_t)reclen * (big_rand%numrecs64);
 #else
 #ifdef Windows
-		rand1=(long long)rand();
-		rand2=(long long)rand();
-		rand3=(long long)rand();
-		big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-		current_offset = (off64_t)reclen * (big_rand%numrecs64);
+		   rand1=(long long)rand();
+		   rand2=(long long)rand();
+		   rand3=(long long)rand();
+		   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+		   current_offset = (off64_t)reclen * (big_rand%numrecs64);
 #else
-		current_offset = reclen * (lrand48()%numrecs64);
+		   current_offset = reclen * (lrand48()%numrecs64);
 #endif
 #endif
+#endif
+		}
 
 		if (!(h_flag || k_flag || mmapflag))
 		{
 		  if(I_LSEEK( fd, current_offset, SEEK_SET )<0)
 		  {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			perror("lseek");
 			exit(158);
 		  };
@@ -15923,6 +16769,8 @@ thread_ranread_test(x)
 		fprintf(thread_Lwqfd,"%-25s %s","Random read finished: ",now_string);
 		fclose(thread_Lwqfd);
 	}
+	if(recnum)
+		free(recnum);
 	if(distributed && client_iozone)
 		return(0);
 #ifdef NO_THREADS
@@ -15977,19 +16825,23 @@ thread_ranwrite_test( x)
 	char now_string[30];
 	FILE *thread_randwqfd=0;
 	FILE *thread_Lwqfd=0;
-#ifdef VXFS
+	long long *recnum = 0;
+#if defined(VXFS) || defined(solaris)
 	int test_foo = 0;
 #endif
 #if defined (bsd4_2) || defined(Windows)
 	long long rand1,rand2,rand3;
-	long long big_rand;
 #endif
+	unsigned long long big_rand;
 
 #ifdef ASYNC_IO
 	struct cache *gc=0;
 
 #else
 	long long *gc=0;
+#endif
+#ifdef MERSENNE
+        unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL}, length=4;
 #endif
 
 	if(compute_flag)
@@ -16001,6 +16853,57 @@ thread_ranwrite_test( x)
 	written_so_far=read_so_far=re_written_so_far=re_read_so_far=0;
 	w_traj_bytes_completed=w_traj_ops_completed=0;
 	recs_per_buffer = cache_size/reclen ;
+#ifdef MERSENNE
+        init_by_array64(init, length);
+#else
+#ifdef bsd4_2
+        srand(0);
+#else
+#ifdef Windows
+        srand(0);
+#else
+        srand48(0);
+#endif
+#endif
+#endif
+        recnum = (long long *) malloc(sizeof(*recnum)*numrecs64);
+        if (recnum){
+             /* pre-compute random sequence based on 
+		Fischer-Yates (Knuth) card shuffle */
+            for(i = 0; i < numrecs64; i++){
+                recnum[i] = i;
+            }
+            for(i = 0; i < numrecs64; i++) {
+                long long tmp = recnum[i];
+#ifdef MERSENNE
+      	       big_rand = genrand64_int64();
+#else
+#ifdef bsd4_2
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+#ifdef Windows
+               rand1=(long long)rand();
+               rand2=(long long)rand();
+               rand3=(long long)rand();
+               big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+#else
+               big_rand = lrand48();
+#endif
+#endif
+#endif
+               big_rand = big_rand%numrecs64;
+               tmp = recnum[i];
+               recnum[i] = recnum[big_rand];
+               recnum[big_rand] = tmp;
+            }
+        }
+	else
+	{
+		fprintf(stderr,"Random uniqueness fallback.\n");
+	}
 #ifdef NO_THREADS
 	xx=chid;
 #else
@@ -16069,18 +16972,10 @@ thread_ranwrite_test( x)
 	/*******************************************************************/
 	/* Random write throughput performance test. **********************/
 	/*******************************************************************/
-#ifdef foobar
-	if((fd = I_CREAT(dummyfile[xx], 0640))<0)
-	{
-		perror(dummyfile[xx]);
-		exit(123);
-	}
-	close(fd);
-#endif
 	if(oflag)
-		flags=O_RDWR|O_SYNC;
+		flags=O_RDWR|O_SYNC|O_CREAT;
 	else
-		flags=O_RDWR;
+		flags=O_RDWR|O_CREAT;
 #if defined(O_DSYNC)
 	if(odsync)
 		flags |= O_DSYNC;
@@ -16091,7 +16986,7 @@ thread_ranwrite_test( x)
 #endif
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 	if(direct_flag)
 		flags |=O_DIRECT;
 #endif
@@ -16111,8 +17006,11 @@ thread_ranwrite_test( x)
 		  NULL);
        	}
 #endif
-	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0))<0)
+	if((fd = I_OPEN(dummyfile[xx], ((int)flags),0640))<0)
 	{
+		client_error=errno;
+		if(distributed && client_iozone)
+			send_stop();
 		printf("\nCan not open temp file: %s\n", 
 			filename);
 		perror("open");
@@ -16130,6 +17028,18 @@ thread_ranwrite_test( x)
 			exit(3);
 		}
 	}
+#endif
+#if defined(solaris)
+        if(direct_flag)
+        {
+                test_foo = directio(fd, DIRECTIO_ON);
+                if(test_foo != 0)
+                {
+                        if(!client_iozone)
+                          printf("\ndirectio not available.\n");
+                        exit(3);
+                }
+        }
 #endif
 #ifdef ASYNC_IO
 	if(async_flag)
@@ -16175,6 +17085,9 @@ thread_ranwrite_test( x)
 		thread_randwqfd=fopen(tmpname,"a");
 		if(thread_randwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -16186,6 +17099,9 @@ thread_ranwrite_test( x)
 		thread_Lwqfd=fopen(tmpname,"a");
 		if(thread_Lwqfd==0)
 		{
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			printf("Unable to open %s\n",tmpname);
 			exit(40);
 		}
@@ -16193,7 +17109,7 @@ thread_ranwrite_test( x)
 		fprintf(thread_Lwqfd,"%-25s %s","Random write start: ",
 			now_string);
 	}
-	if(verify && !no_copy_flag)
+	if((verify && !no_copy_flag) || dedup || dedup_interior)
 		fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)0);
 	starttime1 = time_so_far();
 	if(cpuutilflag)
@@ -16204,28 +17120,35 @@ thread_ranwrite_test( x)
 	for(i=0; i<numrecs64; i++){
 		if(compute_flag)
 			compute_val+=do_compute(delay);
+		if (recnum) {
+			current_offset = reclen * (long long)recnum[i];
+                } else {
 #ifdef bsd4_2
-		rand1=rand();
-		rand2=rand();
-		rand3=rand();
-		big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-		current_offset = (off64_t)reclen * (big_rand%numrecs64);
+		   rand1=rand();
+		   rand2=rand();
+		   rand3=rand();
+		   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+		   current_offset = (off64_t)reclen * (big_rand%numrecs64);
 #else
 #ifdef Windows
-		rand1=rand();
-		rand2=rand();
-		rand3=rand();
-		big_rand=(rand1<<32)|(rand2<<16)|(rand3);
-		current_offset = (off64_t)reclen * (big_rand%numrecs64);
+		   rand1=rand();
+		   rand2=rand();
+		   rand3=rand();
+		   big_rand=(rand1<<32)|(rand2<<16)|(rand3);
+		   current_offset = (off64_t)reclen * (big_rand%numrecs64);
 #else
-		current_offset = reclen * (lrand48()%numrecs64);
+		   current_offset = reclen * (lrand48()%numrecs64);
 #endif
 #endif
+		}
 
 		if (!(h_flag || k_flag || mmapflag))
 		{
 		  if(I_LSEEK( fd, current_offset, SEEK_SET )<0)
 		  {
+			client_error=errno;
+			if(distributed && client_iozone)
+				send_stop();
 			perror("lseek");
 			exit(158);
 		  };
@@ -16241,7 +17164,7 @@ thread_ranwrite_test( x)
 			mylockr((int) fd, (int) 1, (int)0,
 			  lock_offset, reclen);
 		}
-		if(verify && !no_copy_flag)
+		if((verify && !no_copy_flag) || dedup || dedup_interior)
 			fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)(current_offset/reclen));
 		if(*stop_flag && !stopped){
 			if(include_flush)
@@ -16301,7 +17224,7 @@ again:
 			     {
 				free_addr=nbuff=(char *)malloc((size_t)reclen+page_size);
 				nbuff=(char *)(((long)nbuff+(long)page_size) & (long)~(page_size-1));
-				if(verify)
+				if(verify || dedup || dedup_interior)
 					fill_buffer(nbuff,reclen,(long long)pattern,sverify,(long long)(current_offset/reclen));
 			        async_write_no_copy(gc, (long long)fd, nbuff, reclen, (current_offset), depth,free_addr);
 			     }
@@ -16498,6 +17421,8 @@ again:
 			now_string);
 		fclose(thread_Lwqfd);
 	}
+	if(recnum)
+		free(recnum);
 	if(distributed && client_iozone)
 		return(0);
 #ifdef NO_THREADS
@@ -17006,7 +17931,7 @@ int flag, prot;
 	 	file_flags=fcntl(fd,F_GETFL);
 
 #if ! defined(DONT_HAVE_O_DIRECT)
-#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64)
+#if defined(linux) || defined(__AIX__) || defined(IRIX) || defined(IRIX64) || defined(Windows) || defined (__FreeBSD__)
 		dflag = O_DIRECT;
 #endif
 #if defined(TRU64)
@@ -17326,21 +18251,32 @@ static double
 time_so_far1()
 #endif
 {
-	/* For Windows the time_of_day() is useless. It increments in 55 milli second   */
-	/* increments. By using the Win32api one can get access to the high performance */
-	/* measurement interfaces. With this one can get back into the 8 to 9  		*/
-	/* microsecond resolution.							*/
+     /* For Windows the time_of_day() is useless. It increments in 
+        55 milli second  increments. By using the Win32api one can 
+	get access to the high performance measurement interfaces. 
+	With this one can get back into the 8 to 9 microsecond resolution
+      */
 #ifdef Windows
 	LARGE_INTEGER freq,counter;
 	double wintime;
 	double bigcounter;
+  	struct timeval tp;
 
-       	QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&counter);
-        bigcounter=(double)counter.HighPart *(double)0xffffffff +
-                (double)counter.LowPart;
-        wintime = (double)(bigcounter/(double)freq.LowPart);
-        return((double)wintime*1000000.0);
+  	if(pit_hostname[0]){
+  	   pit_gettimeofday(&tp, (struct timezone *) NULL, pit_hostname, 
+		pit_service);
+	   return ((double) (tp.tv_sec)*1000000.0)+(((double)tp.tv_usec));
+	}
+	else
+	{	
+
+       	   QueryPerformanceFrequency(&freq);
+           QueryPerformanceCounter(&counter);
+           bigcounter=(double)counter.HighPart *(double)0xffffffff +
+                   (double)counter.LowPart;
+           wintime = (double)(bigcounter/(double)freq.LowPart);
+           return((double)wintime*1000000.0);
+	}
 #else
 #if defined (OSFV4) || defined(OSFV3) || defined(OSFV5)
   struct timespec gp;
@@ -17352,10 +18288,18 @@ time_so_far1()
 #else
   struct timeval tp;
 
-  if (gettimeofday(&tp, (struct timezone *) NULL) == -1)
-    perror("gettimeofday");
-  return ((double) (tp.tv_sec)*1000000.0) +
-    (((double) tp.tv_usec) );
+  if(pit_hostname[0]){
+     if (pit_gettimeofday(&tp, (struct timezone *) NULL, pit_hostname, 
+		pit_service) == -1)
+        perror("pit_gettimeofday");
+     return ((double) (tp.tv_sec)*1000000.0) + (((double) tp.tv_usec) );
+  }
+  else
+  {
+     if (gettimeofday(&tp, (struct timezone *) NULL) == -1)
+        perror("gettimeofday");
+     return ((double) (tp.tv_sec)*1000000.0) + (((double) tp.tv_usec) );
+  }
 #endif
 #endif
 }
@@ -18503,6 +19447,7 @@ int send_size;
 	strcpy(outbuf.m_host_name,send_buffer->m_host_name);
 	strcpy(outbuf.m_client_name,send_buffer->m_client_name);
 	sprintf(outbuf.m_client_number,"%d",send_buffer->m_client_number);
+	sprintf(outbuf.m_client_error,"%d",send_buffer->m_client_error);
 	sprintf(outbuf.m_child_port,"%d",send_buffer->m_child_port);
 	sprintf(outbuf.m_child_async_port,"%d",send_buffer->m_child_async_port);
 	sprintf(outbuf.m_command,"%d",send_buffer->m_command);
@@ -18561,6 +19506,8 @@ int send_size;
 	 * Convert internal commands to string format for neutral format/portability
 	 */
 	strcpy(outbuf.c_host_name,send_buffer->c_host_name);
+	strcpy(outbuf.c_pit_hostname,send_buffer->c_pit_hostname);
+	strcpy(outbuf.c_pit_service,send_buffer->c_pit_service);
 	strcpy(outbuf.c_client_name,send_buffer->c_client_name);
 	strcpy(outbuf.c_working_dir,send_buffer->c_working_dir);
 	strcpy(outbuf.c_file_name,send_buffer->c_file_name);
@@ -18572,6 +19519,7 @@ int send_size;
 	sprintf(outbuf.c_mfflag,"%d",send_buffer->c_mfflag);
 	sprintf(outbuf.c_unbuffered,"%d",send_buffer->c_unbuffered);
 	sprintf(outbuf.c_noretest,"%d",send_buffer->c_noretest);
+	sprintf(outbuf.c_notruncate,"%d",send_buffer->c_notruncate);
 	sprintf(outbuf.c_read_sync,"%d",send_buffer->c_read_sync);
 	sprintf(outbuf.c_jflag,"%d",send_buffer->c_jflag);
 	sprintf(outbuf.c_async_flag,"%d",send_buffer->c_async_flag);
@@ -18585,6 +19533,10 @@ int send_size;
 	sprintf(outbuf.c_sverify,"%d",send_buffer->c_sverify);
 	sprintf(outbuf.c_odsync,"%d",send_buffer->c_odsync);
 	sprintf(outbuf.c_diag_v,"%d",send_buffer->c_diag_v);
+	sprintf(outbuf.c_dedup,"%d",send_buffer->c_dedup);
+	sprintf(outbuf.c_dedup_interior,"%d",send_buffer->c_dedup_interior);
+	sprintf(outbuf.c_dedup_compress,"%d",send_buffer->c_dedup_compress);
+	sprintf(outbuf.c_dedup_mseed,"%d",send_buffer->c_dedup_mseed);
 	sprintf(outbuf.c_Q_flag,"%d",send_buffer->c_Q_flag);
 	sprintf(outbuf.c_L_flag,"%d",send_buffer->c_L_flag);
 	sprintf(outbuf.c_include_flush,"%d",send_buffer->c_include_flush);
@@ -18609,6 +19561,7 @@ int send_size;
 	sprintf(outbuf.c_command,"%d",send_buffer->c_command);
 	sprintf(outbuf.c_testnum,"%d",send_buffer->c_testnum);
 	sprintf(outbuf.c_no_unlink,"%d",send_buffer->c_no_unlink);
+	sprintf(outbuf.c_no_write,"%d",send_buffer->c_no_write);
 	sprintf(outbuf.c_file_lock,"%d",send_buffer->c_file_lock);
 	sprintf(outbuf.c_rec_lock,"%d",send_buffer->c_rec_lock);
 	sprintf(outbuf.c_Kplus_readers,"%d",send_buffer->c_Kplus_readers);
@@ -18677,6 +19630,14 @@ char *controlling_host_name;
 	struct hostent *he;
 	int tmp_port;
 	struct in_addr *ip;
+        int host_port = HOST_LIST_PORT;
+        char *port_ptr;
+
+        /* detect host:port combination, strip off the port */
+       if ((port_ptr = strchr(controlling_host_name, ':')) != NULL) {
+               host_port = atoi(port_ptr+1);
+               port_ptr[0] = '\0';
+       }
 
         he = gethostbyname(controlling_host_name);
         if (he == NULL)
@@ -18702,9 +19663,9 @@ char *controlling_host_name;
 	}
 #endif
 
-
         raddr.sin_family = AF_INET;
-        raddr.sin_port = htons(HOST_LIST_PORT);
+	/*raddr.sin_port = htons(HOST_LIST_PORT);*/
+        raddr.sin_port = htons(host_port);
         raddr.sin_addr.s_addr = ip->s_addr;
         child_socket_val = socket(AF_INET, SOCK_DGRAM, 0);
         if (child_socket_val < 0)
@@ -19345,6 +20306,8 @@ long long numrecs64, reclen;
 	struct master_neutral_command *mnc;
 	char command[512];
 	struct in_addr my_s_addr;
+	char my_port_num[10];
+
 
 	bzero(&cc,sizeof(struct client_command));
 	for(x=0;x<512;x++)
@@ -19363,6 +20326,11 @@ long long numrecs64, reclen;
 	strcat(command,child_idents[x-1].execute_path);
 	strcat(command," -+s -t 1 -r 4 -s 4 -+c ");
 	strcat(command,controlling_host_name);
+        if (master_listen_port != HOST_LIST_PORT)
+        {
+          sprintf(my_port_num,":%01u",master_listen_port);
+          strcat(command,my_port_num);
+        }
 	strcat(command," '");
 	system(command);
 /*
@@ -19428,6 +20396,8 @@ long long numrecs64, reclen;
 	/* Step 4. Send message to client telling him his name, number, */
 	/*             rsize, fsize, and test to run.			*/
 	strcpy(cc.c_host_name ,controlling_host_name);
+	strcpy(cc.c_pit_hostname ,pit_hostname);
+	strcpy(cc.c_pit_service ,pit_service);
 	strcpy(cc.c_client_name ,child_idents[x-1].child_name);
 	strcpy(cc.c_working_dir ,child_idents[x-1].workdir);
 	strcpy(cc.c_file_name ,child_idents[x-1].file_name);
@@ -19442,6 +20412,7 @@ long long numrecs64, reclen;
 	cc.c_mfflag = mfflag;
 	cc.c_unbuffered = unbuffered;
 	cc.c_noretest = noretest;
+	cc.c_notruncate = notruncate;
 	cc.c_read_sync = read_sync;
 	cc.c_jflag = jflag;
 	cc.c_direct_flag = direct_flag;
@@ -19458,6 +20429,10 @@ long long numrecs64, reclen;
 	cc.c_sverify = sverify;
 	cc.c_odsync = odsync;
 	cc.c_diag_v = diag_v;
+	cc.c_dedup = dedup;
+	cc.c_dedup_interior = dedup_interior;
+	cc.c_dedup_compress = dedup_compress;
+	cc.c_dedup_mseed = dedup_mseed;
 	cc.c_file_lock = file_lock;
 	cc.c_rec_lock = rlocking;
 	cc.c_Kplus_readers = Kplus_readers;
@@ -19485,6 +20460,7 @@ long long numrecs64, reclen;
 	cc.c_mmapssflag = mmapssflag;
 	cc.c_no_copy_flag = no_copy_flag;
 	cc.c_no_unlink = no_unlink;
+	cc.c_no_write = no_write;
 	cc.c_include_close = include_close;
 	cc.c_disrupt_flag = disrupt_flag;
 	cc.c_compute_flag = compute_flag;
@@ -19558,7 +20534,7 @@ become_client()
 	struct master_command mc;
 	struct client_command cc;
 	struct client_neutral_command *cnc;
-	char client_name[256];
+	char client_name[100];
 	char *workdir;
 
 	bzero(&mc,sizeof(struct master_command));
@@ -19568,7 +20544,7 @@ become_client()
 	/*
  	 * I am the child 
 	 */
-	(void)gethostname(client_name,256);
+	(void)gethostname(client_name,100);
 
 	fflush(stdout);
 	fflush(stderr);
@@ -19634,6 +20610,7 @@ become_client()
 	sscanf(cnc->c_client_name,"%s",cc.c_client_name);
 	sscanf(cnc->c_client_number,"%d",&cc.c_client_number);
 	sscanf(cnc->c_host_name,"%s",cc.c_host_name);
+	sscanf(cnc->c_pit_hostname,"%s",cc.c_pit_hostname);
 
 	if(cc.c_command == R_TERMINATE || cc.c_command==R_DEATH)
 	{
@@ -19680,6 +20657,8 @@ become_client()
 	sscanf(cnc->c_delay_start,"%lld",&cc.c_delay_start);
 	sscanf(cnc->c_depth,"%lld",&cc.c_depth);
 #endif
+	sscanf(cnc->c_pit_hostname,"%s",cc.c_pit_hostname);
+	sscanf(cnc->c_pit_service,"%s",cc.c_pit_service);
 	sscanf(cnc->c_testnum,"%d",&cc.c_testnum);
 	sscanf(cnc->c_client_number,"%d",&cc.c_client_number);
 	sscanf(cnc->c_working_dir,"%s",cc.c_working_dir);
@@ -19687,6 +20666,7 @@ become_client()
 	sscanf(cnc->c_write_traj_filename,"%s",cc.c_write_traj_filename);
 	sscanf(cnc->c_read_traj_filename,"%s",cc.c_read_traj_filename);
 	sscanf(cnc->c_noretest,"%d",&cc.c_noretest);
+	sscanf(cnc->c_notruncate,"%d",&cc.c_notruncate);
 	sscanf(cnc->c_read_sync,"%d",&cc.c_read_sync);
 	sscanf(cnc->c_jflag,"%d",&cc.c_jflag);
 	sscanf(cnc->c_direct_flag,"%d",&cc.c_direct_flag);
@@ -19702,6 +20682,10 @@ become_client()
 	sscanf(cnc->c_sverify,"%d",&cc.c_sverify);
 	sscanf(cnc->c_odsync,"%d",&cc.c_odsync);
 	sscanf(cnc->c_diag_v,"%d",&cc.c_diag_v);
+	sscanf(cnc->c_dedup,"%d",&cc.c_dedup);
+	sscanf(cnc->c_dedup_interior,"%d",&cc.c_dedup_interior);
+	sscanf(cnc->c_dedup_compress,"%d",&cc.c_dedup_compress);
+	sscanf(cnc->c_dedup_mseed,"%d",&cc.c_dedup_mseed);
 	sscanf(cnc->c_file_lock,"%d",&cc.c_file_lock);
 	sscanf(cnc->c_rec_lock,"%d",&cc.c_rec_lock);
 	sscanf(cnc->c_Kplus_readers,"%d",&cc.c_Kplus_readers);
@@ -19731,6 +20715,7 @@ become_client()
 	sscanf(cnc->c_w_traj_flag,"%d",&cc.c_w_traj_flag);
 	sscanf(cnc->c_r_traj_flag,"%d",&cc.c_r_traj_flag);
 	sscanf(cnc->c_no_unlink,"%d",&cc.c_no_unlink);
+	sscanf(cnc->c_no_write,"%d",&cc.c_no_write);
 	sscanf(cnc->c_include_close,"%d",&cc.c_include_close);
 	sscanf(cnc->c_disrupt_flag,"%d",&cc.c_disrupt_flag);
 	sscanf(cnc->c_compute_flag,"%d",&cc.c_compute_flag);
@@ -19742,6 +20727,8 @@ become_client()
 	strcpy(write_traj_filename,cc.c_write_traj_filename);
 	strcpy(read_traj_filename,cc.c_read_traj_filename);
 	numrecs64 = cc.c_numrecs64;
+	strcpy(pit_hostname,cc.c_pit_hostname);
+	strcpy(pit_service,cc.c_pit_service);
 	reclen = cc.c_reclen;
 	testnum = cc.c_testnum;
 	chid = cc.c_client_number;
@@ -19755,6 +20742,7 @@ become_client()
 		printf("File name given %s\n",cc.c_file_name);
 	unbuffered = cc.c_unbuffered;
 	noretest = cc.c_noretest;
+	notruncate = cc.c_notruncate;
 	read_sync = cc.c_read_sync;
 	jflag = cc.c_jflag;
 	direct_flag = cc.c_direct_flag;
@@ -19769,6 +20757,10 @@ become_client()
 	fetchon = cc.c_fetchon;
 	verify = cc.c_verify;
 	diag_v = cc.c_diag_v;
+	dedup = cc.c_dedup;
+	dedup_interior = cc.c_dedup_interior;
+	dedup_compress = cc.c_dedup_compress;
+	dedup_mseed = cc.c_dedup_mseed;
 	if(diag_v)
 		sverify = 0;
 	else
@@ -19800,6 +20792,7 @@ become_client()
 	mmapssflag = cc.c_mmapssflag; 
 	no_copy_flag = cc.c_no_copy_flag;
 	no_unlink = cc.c_no_unlink;
+	no_write = cc.c_no_write;
 	include_close = cc.c_include_close;
 	disrupt_flag = cc.c_disrupt_flag;
 	compute_flag = cc.c_compute_flag;
@@ -19822,7 +20815,8 @@ become_client()
 
 	/* 6. Change to the working directory */
 
-	chdir(workdir);
+	if(chdir(workdir)<0)
+		client_error=errno;
 	start_child_listen_loop(); /* The async channel listener */
 
 	/* Need to start this after getting into the correct directory */
@@ -19830,6 +20824,8 @@ become_client()
 		w_traj_size();
 	if(r_traj_flag)
 		r_traj_size();
+
+	get_resolution(); 		/* Get my clock resolution */
 
 	/* 7. Run the test */
 	switch(testnum) {
@@ -19983,6 +20979,7 @@ long long child_flag;
 	struct master_command mc;
 	bzero(&mc,sizeof(struct master_command));
 	mc.m_client_number = (int) chid;
+	mc.m_client_error = (int) client_error;
 	mc.m_throughput= throughput;
 	mc.m_testnum = testnum;
 	mc.m_actual = actual;
@@ -20043,6 +21040,7 @@ long long chid;
 	mc.m_version = proto_version;
 	mc.m_child_flag = CHILD_STATE_READY; 
 	mc.m_client_number = (int)chid; 
+	mc.m_client_error = client_error;
 	child_send(s_sock, controlling_host_name,(struct master_command *)&mc, sizeof(struct master_command));
 }
 
@@ -20119,11 +21117,17 @@ int num;
 		 */
 		sscanf(mnc->m_command,"%d",&mc.m_command);
 		sscanf(mnc->m_client_number,"%d",&mc.m_client_number);
+		sscanf(mnc->m_client_error,"%d",&mc.m_client_error);
 		sscanf(mnc->m_version,"%d",&mc.m_version);
 		if(mc.m_version != proto_version)
 		{
 			printf("Client # %d is not running the same version of Iozone !\n",
 				mc.m_client_number);
+		}		
+		if(mc.m_client_error != 0)
+		{
+			printf("\nClient # %d reporting an error %s !\n",
+				mc.m_client_number,strerror(mc.m_client_error));
 		}		
 #ifdef NO_PRINT_LLD
 		sscanf(mnc->m_child_flag,"%ld",&mc.m_child_flag);
@@ -20328,6 +21332,11 @@ get_client_info()
 	}
 	while(1)
 	{
+          	if (count >= MAXSTREAMS) {                                                                           
+            	  printf("Too many lines in client file - max of %d supported\n",
+			MAXSTREAMS);
+            	  exit(7);
+          	}
 		ret1=fgets(buffer,200,fd);
 		if(ret1== (char *)NULL)
 			break;
@@ -20504,12 +21513,14 @@ send_stop()
 	mc.m_command = R_STOP_FLAG;
 	mc.m_version = proto_version;
 	mc.m_client_number = chid;
+	mc.m_client_error = client_error;
 	if(cdebug)
 	{
 		printf("Child %d sending stop flag to master\n",(int)chid);
 		fflush(stdout);
 	}
         child_send(s_sock, controlling_host_name,(struct master_command *)&mc, sizeof(struct master_command));
+	client_error=0;  /* clear error, it has been delivered */
 }
 
 /*
@@ -20618,7 +21629,7 @@ find_external_mon(imon_start,imon_stop)
 char *imon_start,*imon_stop;
 #endif
 {
-	char *start,*stop;
+	char *start,*stop,*sync;
 	imon_start[0]=(char)0;
 	imon_stop[0]=(char)0;
 	start=(char *)getenv("IMON_START");
@@ -20631,6 +21642,12 @@ char *imon_start,*imon_stop;
 	{
 		strcpy(imon_stop,stop);
 	}
+	sync=(char *)getenv("IMON_SYNC");
+	if(sync)
+	{
+		imon_sync=1;
+	}
+
 	return;
 }	
 
@@ -21468,13 +22485,21 @@ check_filename(name)
 char *name;
 #endif
 {
+#ifdef _LARGEFILE64_SOURCE
+	struct stat64 mystat;
+#else
 	struct stat mystat;
+#endif
 	int x;
 	if(strlen(name)==0)
 		return(0);
-	x=stat(name,&mystat);
+	/* Lets try stat first.. may get an error if file is too big */
+	x=I_STAT(name,&mystat);
 	if(x<0)
+	{
 		return(0);
+		/* printf("Stat failed %d\n",x); */
+	}
 	if(mystat.st_mode & S_IFREG)
 	{
 		/*printf("Is a regular file\n");*/
@@ -21482,6 +22507,7 @@ char *name;
 	}
 	return(0);
 }
+
 #ifdef HAVE_ANSIC_C
 void
 start_monitor(char *test)
@@ -21493,7 +22519,10 @@ char *test;
 	char command_line[256];
 	if(strlen(imon_start)!=0)
 	{
-		sprintf(command_line,"%s %s&",imon_start,test);
+		if(imon_sync)
+		   sprintf(command_line,"%s %s",imon_start,test);
+		else
+		   sprintf(command_line,"%s %s&",imon_start,test);
 		system(command_line);
 	}
 }
@@ -21508,8 +22537,495 @@ char *test;
 	char command_line[256];
 	if(strlen(imon_stop)!=0)
 	{
-		sprintf(command_line,"%s %s &",imon_stop,test);
+		if(imon_sync)
+		   sprintf(command_line,"%s %s",imon_stop,test);
+		else
+		   sprintf(command_line,"%s %s &",imon_stop,test);
 		system(command_line);
 	}
 }
+
+/* 
+ * As quickly as possible, generate a new buffer that
+ * can not be easily compressed, or de-duped. Also
+ * permit specified percentage of buffer to be updated.
+ *
+ * ibuf ... input buffer
+ * obuf ... output buffer
+ * seed ... Seed to use for srand, rand -> xor ops
+ *          Seed composed from: blocknumber
+		(do not include childnum as you want duplicates)
+ * size ... size of buffers. (in bytes)
+ * percent. Percent of buffer to modify.
+ * percent_interior. Percent of buffer that is dedupable within 
+ *                   and across files 
+ * percent_compress. Percent of buffer that is dedupable within 
+ *                   but not across files 
+ *
+ * Returns 0 (zero) for success, and -1 (minus one) for failure.
+ */
+int
+gen_new_buf(char *ibuf, char *obuf, long seed, int size, int percent,
+	int percent_interior, int percent_compress, int all)
+{
+	register long *ip, *op; /* Register for speed 	*/
+	register long iseed; 	/* Register for speed 	*/
+	register long isize; 	/* Register for speed 	*/
+	register long cseed;	/* seed for dedupable for within & ! across */
+	register int x,w; 	/* Register for speed 	*/
+	register int value; 	/* Register for speed 	*/
+	register int interior_size; 	/* size of interior dedup region */
+	register int compress_size; 	/* size of compression dedup region */
+	if(ibuf == NULL)	/* no input buf 	*/
+		return(-1);
+	if(obuf == NULL)	/* no output buf 	*/
+		return(-1);
+	if((percent > 100) || (percent < 0)) /* percent check */
+		return(-1);
+	if(size == 0)		/* size check 		*/
+		return(-1);
+	srand(seed+1+(((int)numrecs64)*dedup_mseed)); /* set random seed */
+	iseed = rand();		/* generate random value */
+	isize = (size * percent)/100; /* percent that is dedupable */
+	interior_size = ((isize * percent_interior)/100);/* /sizeof(long) */
+	compress_size =((interior_size * percent_compress)/100);
+	ip = (long *)ibuf;	/* pointer to input buf */
+	op = (long *)obuf;	/* pointer to output buf */
+	if(all == 0)		/* Special case for verify only */
+		isize = sizeof(long);
+	/* interior_size = dedup_within + dedup_across */
+	for(w=0;w<interior_size;w+=sizeof(long))	
+	{
+		*op=0xdeadbeef+dedup_mseed;
+		*ip=0xdeadbeef+dedup_mseed;
+		op++;
+		ip++;
+	}	
+	/* Prepare for dedup within but not across */
+	w=interior_size - compress_size;
+	op=(long *)&obuf[w];
+	ip=(long *)&ibuf[w];
+	srand(chid+1+dedup_mseed);            /* set randdom seed 	*/
+	cseed = rand();		/* generate random value */
+	for(w=(interior_size-compress_size);w<interior_size;w+=sizeof(long))	
+	{
+		*op=*ip ^ cseed; /* do the xor op */
+		op++;
+		ip++;
+	}	
+ 	/* isize = dedup across only */
+	for(x=interior_size;x<isize;x+=sizeof(long))	/* tight loop for transformation */
+	{
+		*op=*ip ^ iseed; /* do the xor op */
+		op++;
+		ip++;
+	}	
+	if(all == 0)		/* Special case for verify only */
+		return(0);
+	/* make the rest of the buffer non-dedupable */
+	if(100-percent > 0)
+	{
+		srand(1+seed+((chid+1)*(int)numrecs64)*dedup_mseed);
+		value=rand();
+/* printf("Non-dedup value %x seed %x\n",value,seed);*/
+		for( ; x<size;x+=sizeof(long))
+			*op++=(*ip++)^value; /* randomize the remainder */
+	}
+	return(0);
+}
+/* 
+ * Used to touch all of the buffers so that the CPU data
+ * cache is hot, and not part of the measurement.
+ */
+void
+touch_dedup(char *i, int size)
+{
+	register int x;
+	register long *ip;
+	ip = (long *)i;
+	srand(DEDUPSEED);
+	for(x=0;x<size/sizeof(long);x++)
+	{
+		*ip=rand(); /* fill initial buffer */
+		ip++;
+	}
+}
+
+/* 
+   A C-program for MT19937-64 (2004/9/29 version).
+   Coded by Takuji Nishimura and Makoto Matsumoto.
+
+   This is a 64-bit version of Mersenne Twister pseudorandom number
+   generator.
+
+   Before using, initialize the state by using init_genrand64(seed)  
+   or init_by_array64(init_key, key_length).
+
+   Copyright (C) 2004, Makoto Matsumoto and Takuji Nishimura,
+   All rights reserved.                          
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+     1. Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+     2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+     3. The names of its contributors may not be used to endorse or promote 
+        products derived from this software without specific prior written 
+        permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   References:
+   T. Nishimura, ``Tables of 64-bit Mersenne Twisters''
+     ACM Transactions on Modeling and 
+     Computer Simulation 10. (2000) 348--357.
+   M. Matsumoto and T. Nishimura,
+     ``Mersenne Twister: a 623-dimensionally equidistributed
+       uniform pseudorandom number generator''
+     ACM Transactions on Modeling and 
+     Computer Simulation 8. (Jan. 1998) 3--30.
+
+   Any feedback is very welcome.
+   http://www.math.hiroshima-u.ac.jp/~m-mat/MT/emt.html
+   email: m-mat @ math.sci.hiroshima-u.ac.jp (remove spaces)
+*/
+
+
+
+#define NN 312
+#define MM 156
+#define MATRIX_A 0xB5026F5AA96619E9ULL
+#define UM 0xFFFFFFFF80000000ULL /* Most significant 33 bits */
+#define LM 0x7FFFFFFFULL /* Least significant 31 bits */
+
+
+/* The array for the state vector */
+static unsigned long long mt[NN]; 
+/* mti==NN+1 means mt[NN] is not initialized */
+static int mti=NN+1; 
+
+/* initializes mt[NN] with a seed */
+void init_genrand64(unsigned long long seed)
+{
+    mt[0] = seed;
+    for (mti=1; mti<NN; mti++) 
+        mt[mti] =  (6364136223846793005ULL * (mt[mti-1] ^ (mt[mti-1] >> 62)) + mti);
+}
+
+/* initialize by an array with array-length */
+/* init_key is the array for initializing keys */
+/* key_length is its length */
+void init_by_array64(unsigned long long init_key[],
+		     unsigned long long key_length)
+{
+    unsigned long long i, j, k;
+    init_genrand64(19650218ULL);
+    i=1; j=0;
+    k = (NN>key_length ? NN : key_length);
+    for (; k; k--) {
+        mt[i] = (mt[i] ^ ((mt[i-1] ^ (mt[i-1] >> 62)) * 3935559000370003845ULL))
+          + init_key[j] + j; /* non linear */
+        i++; j++;
+        if (i>=NN) { mt[0] = mt[NN-1]; i=1; }
+        if (j>=key_length) j=0;
+    }
+    for (k=NN-1; k; k--) {
+        mt[i] = (mt[i] ^ ((mt[i-1] ^ (mt[i-1] >> 62)) * 2862933555777941757ULL))
+          - i; /* non linear */
+        i++;
+        if (i>=NN) { mt[0] = mt[NN-1]; i=1; }
+    }
+
+    mt[0] = 1ULL << 63; /* MSB is 1; assuring non-zero initial array */ 
+}
+
+/* generates a random number on [0, 2^64-1]-interval */
+unsigned long long genrand64_int64(void)
+{
+    int i;
+    unsigned long long x;
+    static unsigned long long mag01[2]={0ULL, MATRIX_A};
+
+    if (mti >= NN) { /* generate NN words at one time */
+
+        /* if init_genrand64() has not been called, */
+        /* a default initial seed is used     */
+        if (mti == NN+1) 
+            init_genrand64(5489ULL); 
+
+        for (i=0;i<NN-MM;i++) {
+            x = (mt[i]&UM)|(mt[i+1]&LM);
+            mt[i] = mt[i+MM] ^ (x>>1) ^ mag01[(int)(x&1ULL)];
+        }
+        for (;i<NN-1;i++) {
+            x = (mt[i]&UM)|(mt[i+1]&LM);
+            mt[i] = mt[i+(MM-NN)] ^ (x>>1) ^ mag01[(int)(x&1ULL)];
+        }
+        x = (mt[NN-1]&UM)|(mt[0]&LM);
+        mt[NN-1] = mt[MM-1] ^ (x>>1) ^ mag01[(int)(x&1ULL)];
+
+        mti = 0;
+    }
+  
+    x = mt[mti++];
+
+    x ^= (x >> 29) & 0x5555555555555555ULL;
+    x ^= (x << 17) & 0x71D67FFFEDA60000ULL;
+    x ^= (x << 37) & 0xFFF7EEE000000000ULL;
+    x ^= (x >> 43);
+
+    return x;
+}
+
+/* generates a random number on [0, 2^63-1]-interval */
+long long genrand64_int63(void)
+{
+    return (long long)(genrand64_int64() >> 1);
+}
+
+/* generates a random number on [0,1]-real-interval */
+double genrand64_real1(void)
+{
+    return (genrand64_int64() >> 11) * (1.0/9007199254740991.0);
+}
+
+/* generates a random number on [0,1)-real-interval */
+double genrand64_real2(void)
+{
+    return (genrand64_int64() >> 11) * (1.0/9007199254740992.0);
+}
+
+/* generates a random number on (0,1)-real-interval */
+double genrand64_real3(void)
+{
+    return ((genrand64_int64() >> 12) + 0.5) * (1.0/4503599627370496.0);
+}
+
+#ifdef MT_TEST
+
+int main(void)
+{
+    int i;
+    unsigned long long init[4]={0x12345ULL, 0x23456ULL, 0x34567ULL, 0x45678ULL}, length=4;
+    init_by_array64(init, length);
+    printf("1000 outputs of genrand64_int64()\n");
+    for (i=0; i<1000; i++) {
+      printf("%20llu ", genrand64_int64());
+      if (i%5==4) printf("\n");
+    }
+    printf("\n1000 outputs of genrand64_real2()\n");
+    for (i=0; i<1000; i++) {
+      printf("%10.8f ", genrand64_real2());
+      if (i%5==4) printf("\n");
+    }
+    return 0;
+}
+#endif
+
+/*----------------------------------------------------------------------*/
+/* 									*/
+/* The PIT Programmable Interdimensional Timer 				*/
+/* 									*/
+/* This is used to measure time, when you know something odd is going   */
+/* to be happening with your wrist watch. For example, you have entered	*/
+/* a temporal distortion field where time its-self is not moving        */
+/* as it does in your normal universe. ( thing either intense 		*/
+/* gravitational fields bending space-time, or virtual machines playing */
+/* with time )  							*/
+/* So.. you need to measure time, but with respect to a normal 		*/
+/* space-time.  So.. we deal with this by calling for time from another */
+/* machine, but do so with a very similar interface to that of 		*/
+/* gettimeofday().							*/
+/* To activate this, one only needs to set an environmental variable.   */
+/*      Example:   setenv IOZ_PIT hostname_of_PIT_server		*/
+/* The environmental variable tells this client where to go to get 	*/
+/* correct timeofday time stamps, with the usual gettimeofday() 	*/
+/* resolution. (microsecond resolution)					*/
+/*----------------------------------------------------------------------*/
+
+/*----------------------------------------------------------------------*/
+/* The PIT client: Adapted from source found on the web for someone's   */
+/* daytime client code. (Used in many examples for network programming  */
+/* Reads PIT info over a socket from a PIT server. 			*/
+/* The PIT server sends its raw microsecond version of gettimeofday 	*/
+/* The PIT client converts this back into timeval structure format.     */
+/* Written by: Don Capps. [ capps@iozone.org ] 				*/
+/*----------------------------------------------------------------------*/
+
+/*>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<      */
+/* >>>> DON'T forget, you must put a definition for PIT <<<<<<<<<<      */
+/* >>>> in /etc/services  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<      */
+/*>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<      */
+#define DFLT_SERVICE   "PIT"     /* Default service name.            	*/
+#define INVALID_DESC   -1        /* Invalid file (socket) descriptor.	*/
+#define MAXBFRSIZE     256       /* Max bfr sz to read remote TOD.   	*/
+
+/*
+** Type definitions (for convenience).
+*/
+#if defined(Windows)
+int false = 0;
+int true = 1;
+#else
+typedef enum { false = 0, true } boolean;
+#endif
+typedef struct sockaddr_in       sockaddr_in_t;
+typedef struct sockaddr_in6      sockaddr_in6_t;
+
+/*
+ * Routine to mimic gettimeofday() using a remote PIT server 
+ */
+int pit_gettimeofday( struct timeval *tp, struct timezone *foo,
+	char *pit_hostname, char *pit_service)
+{
+	int            	sckt;          /* socket descriptor */
+	unsigned scopeId = 0;
+
+	/* See if the interdimensional rift is active */
+	
+	if(pit_hostname[0] == 0)
+	{
+		return gettimeofday(tp,foo);
+	}
+
+ 	if ( ( sckt = openSckt( pit_hostname,
+                           pit_service,
+                           scopeId ) ) == INVALID_DESC )
+   	{
+      		fprintf( stderr,
+                  "Sorry... a connectionless socket could "
+                  "not be set up.\n");
+                return -1;
+   	}
+	/*
+   	** Get the remote PIT.
+   	*/
+   	pit( sckt ,tp );
+	close(sckt);
+    	return 0;
+}
+
+/*
+ * Opens a socket for the PIT to use to get the time
+ * from a remote time server ( A PIT server ) 
+ */
+static int openSckt( const char   *host,
+                     const char   *service,
+                     unsigned int  scopeId )
+{
+   struct addrinfo *ai;
+   int              aiErr;
+   struct addrinfo *aiHead;
+   struct addrinfo  hints;
+   sockaddr_in6_t  *pSadrIn6;
+   int              sckt;
+   /*
+    * Initialize the 'hints' structure for getaddrinfo(3).
+   */
+   memset( &hints, 0, sizeof( hints ) );
+   hints.ai_family   = PF_UNSPEC;     /* IPv4 or IPv6 records */
+   hints.ai_socktype = SOCK_STREAM;    /* Connection oriented communication.*/
+   hints.ai_protocol = IPPROTO_TCP;   /* TCP transport layer protocol only. */
+   /*
+   ** Look up the host/service information.
+   */
+   if ( ( aiErr = getaddrinfo( host,
+                               service,
+                               &hints,
+                               &aiHead ) ) != 0 )
+   {
+      fprintf( stderr, "(line %d): ERROR - %s.\n", __LINE__, 
+	 gai_strerror( aiErr ) );
+      return INVALID_DESC;
+   }
+   /*
+   ** Go through the list and try to open a connection.  Continue until either
+   ** a connection is established or the entire list is exhausted.
+   */
+   for ( ai = aiHead,   sckt = INVALID_DESC;
+         ( ai != NULL ) && ( sckt == INVALID_DESC );
+         ai = ai->ai_next )
+   {
+      /*
+      ** IPv6 kluge.  Make sure the scope ID is set.
+      */
+      if ( ai->ai_family == PF_INET6 )
+      {
+         pSadrIn6 = (sockaddr_in6_t*) ai->ai_addr;
+         if ( pSadrIn6->sin6_scope_id == 0 )
+         {
+            pSadrIn6->sin6_scope_id = scopeId;
+         }  /* End IF the scope ID wasn't set. */
+      }  /* End IPv6 kluge. */
+      /*
+      ** Create a socket.
+      */
+      sckt = socket( ai->ai_family, ai->ai_socktype, ai->ai_protocol );
+      if(sckt == -1)
+      {
+         sckt = INVALID_DESC;
+         continue;   /* Try the next address record in the list. */
+      }
+      /*
+      ** Set the target destination for the remote host on this socket.  That
+      ** is, this socket only communicates with the specified host.
+      */
+      if (connect( sckt, ai->ai_addr, ai->ai_addrlen ) )
+      {
+         (void) close( sckt );   /* Could use system call again here, 
+					but why? */
+         sckt = INVALID_DESC;
+         continue;   /* Try the next address record in the list. */
+      }
+   }  /* End FOR each address record returned by getaddrinfo(3). */
+   /*
+   ** Clean up & return.
+   */
+   freeaddrinfo( aiHead );
+   return sckt;
+}  /* End openSckt() */
+
+/*
+ * Read the PIT, and convert this back into timeval 
+ * info, and store it in the timeval structure that was
+ * passed in.
+ */
+static void pit( int sckt, struct timeval *tp)
+{
+   char bfr[ MAXBFRSIZE+1 ];
+   int  inBytes;
+   long long value;
+   /*
+   ** Send a datagram to the server to wake it up.  The content isn't
+   ** important, but something must be sent to let it know we want the TOD.
+   */
+   write( sckt, "Are you there?", 14 );
+   /*
+   ** Read the PIT from the remote host.
+   */
+   inBytes = read( sckt, bfr, MAXBFRSIZE );
+   bfr[ inBytes ] = '\0';   /* Null-terminate the received string. */
+   /* 
+    * Convert result to timeval structure format 
+    */
+   sscanf(bfr,"%lld\n",&value);
+   tp->tv_sec = (long)(value / 1000000);
+   tp->tv_usec = (long)(value % 1000000);
+}  
 

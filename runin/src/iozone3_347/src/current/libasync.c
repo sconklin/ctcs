@@ -150,7 +150,7 @@ extern int one;
  * cache, pointed to by async_init(gc) will be of
  * this structure type.
  */
-char version[] = "Libasync Version $Revision: 1.1.1.1 $";
+char version[] = "Libasync Version $Revision: 3.23 $";
 struct cache_ent {
 	struct aiocb myaiocb;			/* For use in small file mode */
 #ifdef _LARGEFILE64_SOURCE 
@@ -195,6 +195,7 @@ struct cache_ent *alloc_cache();
 struct cache_ent *incache();
 void async_init();
 void end_async();
+int async_suspend();
 int async_read();
 void takeoff_cache();
 void del_cache();
@@ -263,6 +264,33 @@ struct cache *gc;
 	free((void *)gc);
 }
 
+/***********************************************/
+/* Wait for a request to finish                */
+/***********************************************/
+int
+async_suspend(struct cache_ent *ce)
+{
+#ifdef _LARGEFILE64_SOURCE 
+#ifdef __LP64__
+	const struct aiocb * const cblist[1] = {&ce->myaiocb};
+#else
+	const struct aiocb64 * const cblist[1] = {&ce->myaiocb64};
+#endif
+#else
+	const struct aiocb * const cblist[1] = {&ce->myaiocb};
+#endif
+
+#ifdef _LARGEFILE64_SOURCE 
+#ifdef __LP64__
+	return aio_suspend(cblist, 1, NULL);
+#else
+	return aio_suspend64(cblist, 1, NULL);
+#endif
+#else
+	return aio_suspend(cblist, 1, NULL);
+#endif
+}
+
 /*************************************************************************
  * This routine is a generic async reader assist funtion. It takes
  * the same calling parameters as read() but also extends the
@@ -322,15 +350,21 @@ long long depth;
 #ifdef _LARGEFILE64_SOURCE 
 #ifdef __LP64__
 		while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
+		{
+			async_suspend(ce);
+		}
 #else
 		while((ret=aio_error64(&ce->myaiocb64))== EINPROGRESS)
+		{
+			async_suspend(ce);
+		}
 #endif
 #else
 		while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
-#endif
 		{
-			;
+			async_suspend(ce);
 		}
+#endif
 		if(ret)
 		{
 			printf("aio_error 1: ret %d %d\n",ret,errno);
@@ -469,15 +503,21 @@ out:
 #ifdef _LARGEFILE64_SOURCE 
 #ifdef __LP64__
 		while((ret=aio_error(&first_ce->myaiocb))== EINPROGRESS)
+		{
+			async_suspend(first_ce);
+		}
 #else
 		while((ret=aio_error64(&first_ce->myaiocb64))== EINPROGRESS)
+		{
+			async_suspend(first_ce);
+		}
 #endif
 #else
 		while((ret=aio_error(&first_ce->myaiocb))== EINPROGRESS)
-#endif
 		{
-			;
+			async_suspend(first_ce);
 		}
+#endif
 		if(ret)
 			printf("aio_error 2: ret %d %d\n",ret,errno);
 #ifdef _LARGEFILE64_SOURCE 
@@ -827,15 +867,21 @@ long long depth;
 #ifdef _LARGEFILE64_SOURCE 
 #ifdef __LP64__
 		while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
+		{
+			async_suspend(ce);
+		}
 #else
 		while((ret=aio_error64(&ce->myaiocb64))== EINPROGRESS)
+		{
+			async_suspend(ce);
+		}
 #endif
 #else
 		while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
-#endif
 		{
-			;
+			async_suspend(ce);
 		}
+#endif
 		if(ret)
 			printf("aio_error 3: ret %d %d\n",ret,errno);
 #ifdef _LARGEFILE64_SOURCE 
@@ -1005,15 +1051,21 @@ out:
 #ifdef _LARGEFILE64_SOURCE 
 #ifdef __LP64__
 		while((ret=aio_error(&first_ce->myaiocb))== EINPROGRESS)
+		{
+			async_suspend(first_ce);
+		}
 #else
 		while((ret=aio_error64(&first_ce->myaiocb64))== EINPROGRESS)
+		{
+			async_suspend(first_ce);
+		}
 #endif
 #else
 		while((ret=aio_error(&first_ce->myaiocb))== EINPROGRESS)
-#endif
 		{
-			;
+			async_suspend(first_ce);
 		}
+#endif
 		if(ret)
 			printf("aio_error 4: ret %d %d\n",ret,errno);
 #ifdef _LARGEFILE64_SOURCE 
@@ -1388,15 +1440,21 @@ struct cache *gc;
 #ifdef _LARGEFILE64_SOURCE 
 #ifdef __LP64__
 	while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
+	{
+		async_suspend(ce);
+	}
 #else
 	while((ret=aio_error64(&ce->myaiocb64))== EINPROGRESS)
+	{
+		async_suspend(ce);
+	}
 #endif
 #else
 	while((ret=aio_error(&ce->myaiocb))== EINPROGRESS)
-#endif
 	{
-		;
+		async_suspend(ce);
 	}
+#endif
 	if(ret)
 	{
 		printf("aio_error 5: ret %d %d\n",ret,errno);

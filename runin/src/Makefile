@@ -36,8 +36,8 @@ install: all
 	cp memtst.src/memtst ../memtst
 	cp memtester4/memtester ../bin/memtester
 	cp sort.src/sort ../bin
-	cp iozone/iozone ../bin
-	cp iozone/fileop ../bin
+	cp iozone3_347/src/current/iozone ../bin
+	cp iozone3_347/src/current/fileop ../bin
 	cp pi_fftc6/pi_c* ../bin
 	sh -c "$(MAKE) -C cpuburn install"
 	sh -c "$(MAKE) -C crashme install >> /dev/null 2>&1"
@@ -59,9 +59,9 @@ netburn:
 
 io_zone:
 ifdef __BSD__
-	$(MAKE) -C iozone freebsd
+	$(MAKE) -C iozone3_347/src/current freebsd
 else
-	$(MAKE) -C iozone linux
+	$(MAKE) -C iozone3_347/src/current linux
 endif
 
 
@@ -97,5 +97,5 @@ clean: ;
 	$(MAKE) -C crashme clean
 	$(MAKE) -C sort.src clean
 	$(MAKE) -C netburn.src clean
-	$(MAKE) -C iozone clean
+	$(MAKE) -C iozone3_347/src/current clean
 	$(MAKE) -C pi_fftc6 clean

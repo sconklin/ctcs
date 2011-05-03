@@ -2091,4 +2091,189 @@ Add support for building with Sun's Studio 11 compiler
 Revision 3.283
 Bug fix for fread/fwrite with > 2Gig files.
 =============================================================================
+Revision 3.287
+Add O_DIRECT for Windows
+=============================================================================
+Revision 3.288
+Add -+w dedup testing mode.
+=============================================================================
+Revision 3.289
+Make remaining non-dedup data unique.
+=============================================================================
+Revision 3.290
+Make non-dedupable more unique.
+=============================================================================
+Revision 3.291
+Bug fix for non-dedup.
+=============================================================================
+Revision 3.292
+Make random offsets unique, using Knuth shuffle.
+=============================================================================
+Revision 3.292
+free memory used for random offset uniqueness.
+=============================================================================
+Revision 3.294
+Make unique/random offsets 64bits.
+=============================================================================
+Revision 3.295
+Add fallback for random/unique.
+=============================================================================
+Revision 3.296
+Make non-dedup region more unique
+=============================================================================
+Revision 3.297
+Add -+y ## to set percentage of interior dedup.
+=============================================================================
+Revision 3.298
+Add -+y ## to set percentage of interior dedup.
+=============================================================================
+Revision 3.299
+Bug fixes for -+w and -+y
+=============================================================================
+Revision 3.300
+Minor fix for dedup
+=============================================================================
+Revision 3.302
+Adding -+C to set percent of dedupable within a file.
+=============================================================================
+Revision 3.303
+bug fix
+=============================================================================
+Revision 3.304
+Add solaris to read sync O_RSYNC
+=============================================================================
+Revision 3.305
+Add space to avoid field output touching each other.
+=============================================================================
+Revision 3.306
+Add check for config file exceeding MAXSTREAMS.
+=============================================================================
+Revision 3.307
+Add new contributor's name.
+=============================================================================
+Revision 3.308
+Fix type-oh
+=============================================================================
+Revision 3.309
+Bug fix. rewrite_rec needed to fill entire buffer, or later stride read will
+fail.
+=============================================================================
+Revision 3.310
+=============================================================================
+Add ability for remote clients to return errors to the master and
+have the master display on output.
+=============================================================================
+Revision 3.311
+=============================================================================
+fix double reporting of client errors 
+=============================================================================
+Revision 3.312
+=============================================================================
+Eliminate extra file descriptor in fwrite test.
+=============================================================================
+Revision 3.312
+=============================================================================
+bug fix for barray allocation in -T mode
+=============================================================================
+Revision 3.313
+Revision 3.314
+Revision 3.315
+=============================================================================
+Changes from Debian: Retry umount, add fileop for linux-sparc, and
+fix column width in fileop for faster boxes.
+=============================================================================
+Revision 3.316
+Add O_DIRECT support to FreeBSD
+=============================================================================
+Revision 3.317
+Fix for defines in FreeBSD
+=============================================================================
+Revision 3.318
+Add IMON_SYNC to enable monitor scripts to be run sync.
+=============================================================================
+Revision 3.319
+Add directio() for Solaris
+=============================================================================
+Revision 3.320
+Add fixes for unresolved references in directio() for Solaris
+=============================================================================
+Revision 3.321
+Fix type oh.
+=============================================================================
+Revision 3.322
+Fix c++ style comment back to 'C' style comment.
+=============================================================================
+Revision 3.323
+Bug fix for check_filenames and large files
+=============================================================================
+Revision 3.324
+Replace tripple rand() calls with 64 bit Mersene twister.
+=============================================================================
+Revision 3.325
+Add read-only, external file, with no-verify. -+E
+=============================================================================
+Revision 3.325
+Permit -+E on dedup files.
+=============================================================================
+Revision 3.327
+Permit -+E on random read only testing, on existing file.
+=============================================================================
+Revision 3.328
+Add passing master listener's port to remote children if it is not
+HOST_LIST_PORT
+=============================================================================
+Revision 3.329
+Adding Dave Boone's notruncate option -+N
+=============================================================================
+Revision 3.330
+Bug fix for Dave's code.
+=============================================================================
+Revision 3.331
+Add multi -t ops. Fabrice 
+=============================================================================
+Revision 3.332
+Added Li Qin's multi dedup set support. -+S #
+=============================================================================
+Revision 3.333
+Bug fix for -+S dedup_mseed needs to be an integer
+=============================================================================
+Revision 3.334
+Make -+S generate more uniqueness
+=============================================================================
+Revision 3.335
+Make -+S generate more uniqueness
+=============================================================================
+Revision 3.336
+Make -+S generate more uniqueness
+=============================================================================
+Revision 3.337
+Bug fix for -+S
+=============================================================================
+Revision 3.338
+Make umount/remount more robust, in the face of server errors.
+=============================================================================
+Revision 3.339
+Improve the help string for the -+S option.
+=============================================================================
+Revision 3.340
+Add new contributor name.
+=============================================================================
+Revision 3.342
+Add support for the programmable interdimensional timer.
+=============================================================================
+Revision 3.343
+Bug fix for PIT on remote clients.
+=============================================================================
+Revision 3.344
+Bug fix for PIT on remote clients.
+=============================================================================
+Revision 3.345
+Have children re-acquire get_resolution.
+=============================================================================
+Revision 3.346
+Bug fix for t_range addition.
+=============================================================================
+Revision 3.347
+Get rid of a warning. ( An invalid warning, but none the less )
+=============================================================================
 

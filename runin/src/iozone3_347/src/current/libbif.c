@@ -49,6 +49,8 @@
 #define ENDIAN_2  2
 /* Middle Endian */
 #define ENDIAN_3  3
+/* Middle Endian */
+#define ENDIAN_4  4
 
 
 #ifdef HAVE_ANSIC_C
@@ -84,7 +86,7 @@ void do_label(int,char *,int,int);
 /*	  column							*/
 /************************************************************************/
 
-char libbif_version[] = "Libbif Version $Revision: 1.1.1.1 $";
+char libbif_version[] = "Libbif Version $Revision: 3.22 $";
 void do_eof(int );		/* Used internally */
 void do_header(int );		/* Used internally */
 int endian(void);
@@ -404,6 +406,7 @@ int
 endian(void)
 {
 	long long foo = 0x0102030405060708LL;
+	long foo1 = 0x012345678;
 	unsigned char *c,c1,c2,c3,c4,c5,c6,c7,c8;
 	c=(unsigned char *)&foo;
 	c1=*c++;
@@ -431,6 +434,14 @@ endian(void)
 	if( (c1==0x04) && (c2==0x03) && (c3==0x02) && (c4==0x01) &&
 		(c5==0x08) && (c6==0x07) && (c7==0x06) && (c8==0x05) )
 		return(ENDIAN_3);
+	c=(unsigned char *)&foo1;
+	c1=*c++;
+	c2=*c++;
+	c3=*c++;
+	c4=*c++;
+	/* Another middle endian format ? ( PDP-11 ... ) */
+	if( (c1==0x34) && (c2==0x12) && (c3==0x78) && (c4==0x56))
+		return(ENDIAN_4);
 
 	return(-1);
 }

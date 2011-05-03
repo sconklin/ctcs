@@ -40,7 +40,7 @@ are in a table located away from the program code text.
 The -examine <nbytes> argument lets you see in a crude way what
 is contained in the pointer to a procedure data.
 
-19-MAY-1994 GJC@MITECH.COM
+19-MAY-1994 GJC@WORLD.STD.COM
 
 */
 

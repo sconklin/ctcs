@@ -1,0 +1,1 @@
+NMAKE /f MAKEFILE.WNT %1 %2

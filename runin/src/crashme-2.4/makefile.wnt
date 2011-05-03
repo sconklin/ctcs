@@ -1,0 +1,36 @@
+!include <ntwin32.mak>
+
+# Makefile for Crashme, under Microsoft Windows NT.
+# use the MAKE.BAT to invoke this if you want to use
+# the posix environment. 
+#    make posix
+# in order to define environment variables needed.
+#
+# NMAKE /f MAKEFILE.WNT
+
+# 9-SEP-93 George Carrette. GJC@WORLD.STD.COM
+
+all: crashme.exe crashmep.exe pddet.exe
+
+crashme.exe : crashme.obj
+ $(link) $(ldebug) $(conflags) -out:crashme.exe crashme.obj $(conlibs) 
+
+crashme.obj : crashme.c
+ $(cc) $(cdebug) $(cflags) $(cvars) crashme.c -Focrashme.obj
+
+pddet.exe : pddet.obj
+ $(link) $(ldebug) $(conflags) -out:pddet.exe pddet.obj $(conlibs) 
+
+pddet.obj : pddet.c
+ $(cc) $(cdebug) $(cflags) $(cvars) pddet.c -Fopddet.obj
+
+#  call %mstools%\posix\setnvpsx %mstools%
+
+crashmep.exe : crashmep.obj
+ set Lib=%%mstools%%\posix\lib;%%lib%%
+ $(link) $(ldebug) $(psxflags) -out:crashmep.exe crashmep.obj $(psxlibs) 
+
+crashmep.obj : crashme.c
+ set Include=%%mstools%%\posix\h;%%include%%
+ $(cc) $(cdebug) $(cflags) $(psxvars) crashme.c -Focrashmep.obj
+

@@ -39,7 +39,7 @@ would be a different thing. It would also make sense to run this
 stress test at the same time you run other tests, like a multi-user
 benchmark.
 
-Comments may be addressed to the author at GJC@MITECH.COM
+Comments may be addressed to the author at GJC@WORLD.STD.COM
 
 See the documentation in crashme.1 and READ.ME, or read this code for 
 a description of command line arguments to this program. 
@@ -151,6 +151,8 @@ a script.
 #include <unistd.h>
 #endif
 
+#include <sys/wait.h>
+
 typedef void (*BADBOY)();
 
 BADBOY badboy;
@@ -260,10 +262,7 @@ void my_signal(sig, func)
 #else
  struct sigaction act;
  act.sa_handler = func;
-/* act.sa_mask = SA_NOMASK; */
-#ifdef linux
- act.sa_restorer = 0;
-#endif /* linux */
+ bzero(&act.sa_mask,sizeof(sigset_t));
  act.sa_flags = SA_NOMASK;
 #ifdef SA_RESTART
  act.sa_flags |= SA_RESTART;
@@ -272,7 +271,7 @@ void my_signal(sig, func)
 #endif /* SA_ONESHOT */
 }
  
-set_up_signals()
+void set_up_signals()
 {my_signal(SIGILL,again_handler);
 #ifdef SIGTRAP
  my_signal(SIGTRAP,again_handler);
@@ -295,7 +294,7 @@ set_up_signals()
 
 #endif
 
-compute_badboy_1(n)
+void compute_badboy_1(n)
      long n;
 {long j;
  if (malloc_flag == 1)
@@ -347,7 +346,7 @@ BADBOY castaway(dat)
 #endif
   return((BADBOY)dat);}
 
-compute_badboy()
+void compute_badboy()
 {long n;
  n = (nbytes < 0) ? - nbytes : nbytes;
  if (incptr == 0)
@@ -369,7 +368,7 @@ compute_badboy()
                          the_data,(nbytes < 0) ? - nbytes : nbytes);
 */
 
-try_one_crash()
+void try_one_crash()
 {if (nbytes > 0)
    (*badboy)();
  else if (nbytes == 0)
@@ -377,7 +376,7 @@ try_one_crash()
 
 char *subprocess_ind = "subprocess";
  
-main(argc,argv)
+int main(argc,argv)
      int argc; char **argv;
 {long nsubs,hrs,mns,scs,tflag,j,m;
  note_buffer = (char *) malloc(512);
@@ -411,21 +410,23 @@ main(argc,argv)
     note(1);
     record_note();
     if (strchr(argv[4],':'))
-      {sscanf(argv[4],"%d:%d:%d",&hrs,&mns,&scs);
+      {sscanf(argv[4],"%ld:%ld:%ld",&hrs,&mns,&scs);
        tflag = 1;
        nsubs = (((hrs * 60) + mns) * 60) + scs;
-       sprintf(notes,"Subprocess run for %d seconds (%d %02d:%02d:%02d)",
+       sprintf(notes,"Subprocess run for %ld seconds (%ld %02ld:%02ld:%02ld)",
 	       nsubs, hrs / 24, hrs % 24,mns,scs);}
     else
       {tflag = 0;
        nsubs = atol(argv[4]);
-       sprintf(notes,"Creating %d crashme subprocesses",nsubs);}
+       sprintf(notes,"Creating %ld crashme subprocesses",nsubs);}
     note(1);
     vfork_main(tflag,nsubs,argv[0],argv[1],atol(argv[2]),argv[3]);}
  else
    {sprintf(notes,
 	    "crashme [+]<nbytes>[.inc] <srand> <ntrys> [nsub] [verbose]");
-    note(0);}}
+    note(0);}
+ return 0;
+}
 
 void copyright_note(n)
      long n;
@@ -440,19 +441,19 @@ void old_main(argc,argv)
 {char *ptr;
  copyright_note(3);
  nbytes = atol(argv[1]);
- if (ptr = strchr(argv[1],'.'))
+ if ((ptr = strchr(argv[1],'.')))
    incptr = atol(&ptr[1]);
  if (argv[1][0] == '+') malloc_flag = 1;
  nseed = atol(argv[2]);
  ntrys = atol(argv[3]);
- sprintf(notes,"crashme %s%ld.%d %ld %ld",
+ sprintf(notes,"crashme %s%ld.%ld %ld %ld",
 	 (malloc_flag == 0) ? "" : "+",nbytes,incptr,nseed,ntrys);
  note(3);
  record_note();
  if (malloc_flag == 0)
    {the_data = bad_malloc((nbytes < 0) ? -nbytes : nbytes);
     badboy = castaway(the_data);
-    sprintf(notes,"Badboy at %d. 0x%X",badboy,badboy);
+    sprintf(notes,"Badboy at %d. 0x%X",(int) badboy,(unsigned int) badboy);
     note(3);}
  srand(nseed);
 #ifdef WIN32
@@ -481,9 +482,9 @@ void badboy_loop()
  for(i=0;i<ntrys;++i)
    {compute_badboy();
     if (offset)
-      sprintf(notes,"try %d, offset %d",i,offset);
+      sprintf(notes,"try %d, offset %ld",i,offset);
     else if (malloc_flag == 1)
-      sprintf(notes,"try %d, Badboy at %d. 0x%X",i,badboy,badboy);
+      sprintf(notes,"try %d, Badboy at %d. 0x%X",i,(int) badboy,(unsigned int) badboy);
     else
       sprintf(notes,"try %d",i);
     note(5);
@@ -514,7 +515,7 @@ struct status_list
 
 struct status_list *slist = NULL;
 
-record_status(n)
+int record_status(n)
      long n;
 {struct status_list *l;
  for(l=slist;l != NULL; l = l->next)
@@ -527,13 +528,13 @@ record_status(n)
  slist = l;
  return(1);}
 
-summarize_status()
+void summarize_status()
 {struct status_list *l;
  sprintf(notes,"exit status ... number of cases");
  note(2);
  for(l=slist;l != NULL; l = l->next)
    {sprintf(notes,"exit status ... number of cases");
-    sprintf(notes,"%11d ... %5d",l->status,l->count);
+    sprintf(notes,"%11ld ... %5ld",l->status,l->count);
     note(2);}}
 
 #ifndef WIN32
@@ -552,7 +553,7 @@ void monitor_fcn(sig)
  if (monitor_active)
    {++monitor_count;
     if (monitor_count >= monitor_limit)
-      {sprintf(notes,"time limit reached on pid %d 0x%X. using kill.",
+      {sprintf(notes,"time limit reached on pid %ld 0x%lX. using kill.",
 	       monitor_pid,monitor_pid);
        note(3);
        status = kill(monitor_pid,SIGKILL);
@@ -581,24 +582,24 @@ void vfork_main(tflag,nsubs,cmd,nb,sr,nt)
    {my_signal(SIGALRM,monitor_fcn);
     alarm(monitor_period);}
  time(&before_time);
- sprintf(arg5,"%d",verbose_level);
+ sprintf(arg5,"%ld",verbose_level);
  for(j=0;j<n;++j)
-   {sprintf(arg2,"%d",sr+j);
-    sprintf(arg4,"%d",j+1);
+   {sprintf(arg2,"%ld",sr+j);
+    sprintf(arg4,"%ld",j+1);
 #ifdef VMS
     status = vfork();
 #else
     status = fork();
 #endif
     if (status == 0)
-      {status = execl(cmd,cmd,nb,arg2,nt,arg4,arg5,subprocess_ind,0);
+      {status = execlp(cmd,cmd,nb,arg2,nt,arg4,arg5,subprocess_ind,NULL);
        if (status == -1)
 	 {perror(cmd);
 	  exit(1);}}
     else if (status < 0)
       perror(cmd);
     else
-      {sprintf(notes,"pid = %d 0x%X (subprocess %d)",status,status,j+1);
+      {sprintf(notes,"pid = %d 0x%X (subprocess %ld)",status,status,j+1);
        note(3);
        if (seq == 1)
 	 {monitor_pid = status;
@@ -606,19 +607,19 @@ void vfork_main(tflag,nsubs,cmd,nb,sr,nt)
 	  monitor_active = 1;
 	  while((pid = wait(&status)) > 0)
 	    {monitor_active = 0;
-	     sprintf(notes,"pid %d 0x%X exited with status %d",pid,pid,status);
+	     sprintf(notes,"pid %ld 0x%lX exited with status %d",pid,pid,status);
 	     note(3);
 	     record_status(status);}}
        if (tflag == 1)
 	 {time(&after_time);
 	  total_time = after_time - before_time;
 	  if (total_time >= nsubs)
-	    {sprintf(notes,"Time limit reached after run %d",j+1);
+	    {sprintf(notes,"Time limit reached after run %ld",j+1);
 	     note(2);
 	     break;}}}}
  if (seq == 0)
    while((pid = wait(&status)) > 0)
-     {sprintf(notes,"pid %d 0x%X exited with status %d",pid,pid,status);
+     {sprintf(notes,"pid %ld 0x%lX exited with status %d",pid,pid,status);
       note(3);
       record_status(status);}
  time(&after_time);
@@ -632,7 +633,7 @@ void vfork_main(tflag,nsubs,cmd,nb,sr,nt)
  hrs = hrs % 24;
  open_record();
  sprintf(notes,
-	 "Test complete, total real time: %d seconds (%d %02d:%02d:%02d)",
+	 "Test complete, total real time: %ld seconds (%ld %02ld:%02ld:%02ld)",
 	 total_time,dys,hrs,mns,scs);
  note(1);
  summarize_status();

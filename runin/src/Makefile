@@ -25,7 +25,7 @@ dist-clean:
 	rm -f ../bin/pi_c*
 	rm -f /sort.src
 	rm -f ./netburn
-	sh -c "$(MAKE) -C cpuburn dist-clean"
+	sh -c "$(MAKE) -C cpuburn-1.4a dist-clean"
 	sh -c "$(MAKE) -C crashme dist-clean"
 	sh -c "$(MAKE) -C memtester-4.2.1 clean"
 install: all 
@@ -39,7 +39,7 @@ install: all
 	cp iozone3_347/src/current/iozone ../bin
 	cp iozone3_347/src/current/fileop ../bin
 	cp pi_fftc6/pi_c* ../bin
-	sh -c "$(MAKE) -C cpuburn install"
+	sh -c "$(MAKE) -C cpuburn-1.4a install"
 	sh -c "$(MAKE) -C crashme install >> /dev/null 2>&1"
 ifndef __BSD__
 	cp netburn.src/netburn ../bin
@@ -93,7 +93,7 @@ clean: ;
 	rm -f *.o prandom chartst flushb random
 	$(MAKE) -C memtst.src clean
 	$(MAKE) -C memtester-4.2.1 clean
-	$(MAKE) -C cpuburn clean
+	$(MAKE) -C cpuburn-1.4a clean
 	$(MAKE) -C crashme clean
 	$(MAKE) -C sort.src clean
 	$(MAKE) -C netburn.src clean

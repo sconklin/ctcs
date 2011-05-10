@@ -3,8 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-main ()
-{
-	printf("#define SIZEOF_INT %d\n",sizeof(int));
-	exit (0);
+main() {
+	printf("#define SIZEOF_INT %d\n", sizeof(int));
+	exit(0);
 }
